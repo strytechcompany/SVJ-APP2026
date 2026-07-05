@@ -1,0 +1,240 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  ActivityIndicator, StatusBar, Alert, Platform
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { lineStockAPI } from '../../services/api';
+import { LineStockSettlementPrintService } from '../../services/PrintService';
+
+const GOLD = '#D4AF37';
+const DARK_BROWN = '#4B2E05';
+const HEADER_BG = '#4B2E05';
+const BG = '#F8F4E8';
+
+export default function LineStockSettlementBillPreviewScreen({ route, navigation }) {
+  const { settlementId } = route.params;
+  const insets = useSafeAreaInsets();
+  const topPad = insets.top || (Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 44);
+
+  const [settlement, setSettlement] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  const [printing, setPrinting] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const printLockRef = useRef(false);
+
+  useEffect(() => {
+    const fetchBill = async () => {
+      try {
+        const res = await lineStockAPI.getSettlementById(settlementId);
+        if (res.data.success) {
+          setSettlement(res.data.data);
+        } else {
+          Alert.alert('Error', 'Settlement not found', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        }
+      } catch (err) {
+        Alert.alert('Error', 'Could not load settlement details');
+        navigation.goBack();
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchBill();
+  }, [settlementId, navigation]);
+
+  const withPrintLock = async (stateSetter, fn) => {
+    if (printLockRef.current) return;
+    printLockRef.current = true;
+    stateSetter(true);
+    const timeout = setTimeout(() => { printLockRef.current = false; stateSetter(false); }, 60000);
+    try {
+      await fn();
+    } catch (e) {
+      if (!e?.message?.toLowerCase().includes('cancel')) {
+        Alert.alert('Print Error', e?.message || 'Could not complete print action.');
+      }
+    } finally {
+      clearTimeout(timeout);
+      printLockRef.current = false;
+      stateSetter(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={GOLD} />
+        <Text style={{ marginTop: 12, color: DARK_BROWN, fontWeight: '600' }}>Loading Bill...</Text>
+      </View>
+    );
+  }
+
+  if (!settlement) return null;
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor={HEADER_BG} />
+      
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: topPad }]}>
+        <TouchableOpacity style={styles.headerBtn} onPress={() => {
+          // If we came from Settlement screen, reset to Dashboard
+          const routes = navigation.getState().routes;
+          const prevRoute = routes[routes.length - 2];
+          if (prevRoute && prevRoute.name === 'LineStockSettlement') {
+            navigation.popToTop();
+          } else {
+            navigation.goBack();
+          }
+        }}>
+          <MaterialCommunityIcons name="arrow-left" size={24} color={GOLD} />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>Settlement Bill</Text>
+        </View>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.billCard}>
+          <Text style={styles.shopName}>SRI VAISHNAVI JEWELLERS</Text>
+          <Text style={styles.billType}>LINE STOCK SETTLEMENT</Text>
+          <View style={styles.divider} />
+
+          <View style={styles.row}>
+            <Text style={styles.label}>Settlement No:</Text>
+            <Text style={styles.value}>{settlement.settlementNumber}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.label}>Issue Txn No:</Text>
+            <Text style={styles.value}>{settlement.lineStockTransactionId?.transactionNumber}</Text>
+          </View>
+          <View style={styles.row}>
+            <Text style={styles.label}>Date:</Text>
+            <Text style={styles.value}>{new Date(settlement.createdAt).toLocaleDateString('en-GB')}</Text>
+          </View>
+          
+          <View style={styles.divider} />
+          
+          <Text style={styles.sectionTitle}>LINE STOCKER</Text>
+          <View style={styles.row}><Text style={styles.label}>Name:</Text><Text style={styles.value}>{settlement.customerId?.customerName}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Phone:</Text><Text style={styles.value}>{settlement.customerId?.phoneNumber}</Text></View>
+          
+          {/* Sold Items */}
+          {settlement.soldItems?.length > 0 && (
+            <>
+              <View style={styles.divider} />
+              <Text style={[styles.sectionTitle, { color: '#27AE60' }]}>SOLD PRODUCTS</Text>
+              {settlement.soldItems.map((item, idx) => (
+                <View key={idx} style={styles.itemRow}>
+                  <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.itemName} ({item.itemNumber})</Text><Text style={styles.itemSub}>{item.barcode} | {item.purity}</Text></View>
+                  <View style={{ alignItems: 'flex-end' }}><Text style={styles.itemCount}>{item.count} pcs</Text><Text style={styles.itemWeight}>{Number(item.weight).toFixed(3)} g</Text><Text style={styles.itemSub}>₹{item.amount || 0}</Text></View>
+                </View>
+              ))}
+            </>
+          )}
+
+          {/* Returned Items */}
+          {settlement.returnedItems?.length > 0 && (
+            <>
+              <View style={styles.divider} />
+              <Text style={[styles.sectionTitle, { color: '#E74C3C' }]}>RETURNED PRODUCTS</Text>
+              {settlement.returnedItems.map((item, idx) => (
+                <View key={idx} style={styles.itemRow}>
+                  <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.itemName} ({item.itemNumber})</Text><Text style={styles.itemSub}>{item.barcode} | {item.purity}</Text></View>
+                  <View style={{ alignItems: 'flex-end' }}><Text style={styles.itemCount}>{item.count} pcs</Text><Text style={styles.itemWeight}>{Number(item.weight).toFixed(3)} g</Text></View>
+                </View>
+              ))}
+            </>
+          )}
+
+          <View style={styles.divider} />
+          <Text style={styles.sectionTitle}>PAYMENTS</Text>
+          <View style={styles.row}><Text style={styles.label}>Cash:</Text><Text style={styles.value}>₹{settlement.paymentDetails?.cash || 0}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Online:</Text><Text style={styles.value}>₹{settlement.paymentDetails?.online || 0}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Card:</Text><Text style={styles.value}>₹{settlement.paymentDetails?.card || 0}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Gold:</Text><Text style={styles.value}>{Number(settlement.paymentDetails?.gold || 0).toFixed(3)}g</Text></View>
+          
+          <View style={styles.divider} />
+
+          <View style={styles.row}><Text style={styles.label}>Previous Balance:</Text><Text style={styles.value}>{Number(settlement.previousBalance).toFixed(3)}g</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Total Sold Weight Deduct:</Text><Text style={[styles.value, { color: '#E74C3C' }]}>-{settlement.soldItems?.reduce((s,i)=>s+i.weight,0).toFixed(3)}g</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Returned Deduct:</Text><Text style={[styles.value, { color: '#E74C3C' }]}>-{settlement.returnedItems?.reduce((s,i)=>s+i.weight,0).toFixed(3)}g</Text></View>
+          
+          <View style={styles.divider} />
+          
+          <View style={styles.row}><Text style={styles.label}>Total Cash Payments:</Text><Text style={[styles.value, { color: '#27AE60' }]}>₹{(settlement.paymentDetails?.cash || 0) + (settlement.paymentDetails?.online || 0) + (settlement.paymentDetails?.card || 0)}</Text></View>
+          
+          <View style={styles.divider} />
+          <View style={styles.row}><Text style={styles.label}>Final Balance:</Text><Text style={[styles.summaryValue, { color: settlement.finalBalance > 0 ? '#E74C3C' : '#27AE60' }]}>{Number(settlement.finalBalance).toFixed(3)}g</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Advance Balance:</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>{Number(settlement.advanceBalance).toFixed(3)}g</Text></View>
+
+          <View style={styles.divider} />
+          <Text style={styles.tamilMsg}>நீங்கள் வாங்கும் ஒவ்வொரு கிராம் தங்கமும், உங்கள் எதிர்காலத்தின் ஒளிமயமான சேமிப்பு.</Text>
+        </View>
+      </ScrollView>
+
+      {/* Fixed Actions Footer */}
+      <View style={styles.actionsContainer}>
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          <TouchableOpacity 
+            style={[styles.actionBtn, (printing || sharing) && { opacity: 0.6 }]} 
+            disabled={printing || sharing}
+            onPress={() => withPrintLock(setPrinting, () => LineStockSettlementPrintService.printBill(settlement))}
+          >
+            {printing ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="printer" size={20} color="#FFF" />}
+            <Text style={styles.actionText}>{printing ? 'Printing…' : 'Print Bill'}</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={[styles.actionBtn, {backgroundColor: '#25D366'}, (printing || sharing) && { opacity: 0.6 }]} 
+            disabled={printing || sharing}
+            onPress={() => withPrintLock(setSharing, () => LineStockSettlementPrintService.shareWhatsApp(settlement))}
+          >
+            {sharing ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="whatsapp" size={20} color="#FFF" />}
+            <Text style={styles.actionText}>{sharing ? 'Sharing…' : 'WhatsApp'}</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity 
+          style={[styles.actionBtn, {backgroundColor: '#2E7D32', marginTop: 12}]} 
+          disabled={printing || sharing}
+          onPress={() => navigation.navigate('LineStockDashboard')}
+        >
+          <MaterialCommunityIcons name="content-save-check" size={20} color="#FFF" />
+          <Text style={styles.actionText}>Finish</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: BG },
+  header: { backgroundColor: HEADER_BG, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 16, borderBottomLeftRadius: 20, borderBottomRightRadius: 20, elevation: 8 },
+  headerBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerTitle: { color: GOLD, fontSize: 18, fontWeight: '800' },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 16, paddingBottom: 160 },
+  billCard: { backgroundColor: '#FFF', borderRadius: 16, padding: 20, elevation: 3 },
+  shopName: { fontSize: 18, fontWeight: '800', color: DARK_BROWN, textAlign: 'center' },
+  billType: { fontSize: 13, fontWeight: '700', color: '#8A6B3C', textAlign: 'center', marginTop: 4 },
+  divider: { height: 1, backgroundColor: '#F0E4CC', marginVertical: 12 },
+  sectionTitle: { fontSize: 13, fontWeight: '800', color: '#8A6B3C', marginBottom: 8 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  label: { fontSize: 13, color: '#8A6B3C', fontWeight: '600' },
+  value: { fontSize: 14, color: DARK_BROWN, fontWeight: '700' },
+  summaryValue: { fontSize: 15, color: DARK_BROWN, fontWeight: '800' },
+  itemRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  itemName: { fontSize: 13, color: DARK_BROWN, fontWeight: '700' },
+  itemSub: { fontSize: 11, color: '#8A6B3C', marginTop: 2 },
+  itemCount: { fontSize: 12, color: DARK_BROWN, fontWeight: '600' },
+  itemWeight: { fontSize: 13, color: DARK_BROWN, fontWeight: '800', marginTop: 2 },
+  tamilMsg: { fontSize: 10, color: '#8A6B3C', textAlign: 'center', marginTop: 10, fontWeight: '700' },
+  actionsContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFF', padding: 16, elevation: 20, borderTopWidth: 1, borderTopColor: '#F0E4CC' },
+  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: DARK_BROWN, paddingVertical: 14, borderRadius: 12, gap: 8 },
+  actionText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+});
