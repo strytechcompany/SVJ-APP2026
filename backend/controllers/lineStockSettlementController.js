@@ -74,6 +74,7 @@ exports.createSettlement = async (req, res) => {
       advanceBalance: newAdvance,
       remarks,
       status,
+      settledBy: req.user?.name || req.user?.email || 'System',
       createdBy: req.user._id,
     });
     await settlement.save();

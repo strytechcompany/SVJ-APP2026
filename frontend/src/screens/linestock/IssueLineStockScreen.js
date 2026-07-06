@@ -21,7 +21,9 @@ export default function IssueLineStockScreen({ navigation }) {
   // Form State
   const [customers, setCustomers] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+
   const [expectedReturnDate, setExpectedReturnDate] = useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)); // Default 7 days
   const [showDatePicker, setShowDatePicker] = useState(false);
   
@@ -195,6 +197,22 @@ export default function IssueLineStockScreen({ navigation }) {
     loadCustomers();
   }, []);
 
+  const filteredCustomers = customers.filter(c => {
+    const q = customerSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (c.customerName || '').toLowerCase().includes(q) ||
+      (c.phoneNumber || '').includes(q) ||
+      (c.customerCode || '').toLowerCase().includes(q)
+    );
+  });
+
+  const handleSelectCustomer = (c) => {
+    setSelectedCustomer(c);
+    setCustomerSearch(c.customerName);
+    setShowCustomerDropdown(false);
+  };
+
   const addStockItem = (item) => {
     if (!item.isAvailable || item.quantity <= 0) {
       Alert.alert('Out of Stock', 'This item is out of stock.');
@@ -284,18 +302,75 @@ export default function IssueLineStockScreen({ navigation }) {
         {/* Customer Selection */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Select Line Stocker</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.customerScroll}>
-            {customers.map(c => (
-              <TouchableOpacity 
-                key={c._id}
-                style={[styles.customerChip, selectedCustomer?._id === c._id && styles.customerChipActive]}
-                onPress={() => setSelectedCustomer(c)}
+          {selectedCustomer ? (
+            <View style={styles.selectedCustomerRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.selectedCustomerName}>{selectedCustomer.customerName}</Text>
+                <Text style={styles.selectedCustomerSub}>{selectedCustomer.phoneNumber}{selectedCustomer.customerCode ? `  |  ${selectedCustomer.customerCode}` : ''}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.changeCustomerBtn}
+                onPress={() => {
+                  setSelectedCustomer(null);
+                  setCustomerSearch('');
+                  setShowCustomerDropdown(false);
+                }}
               >
-                <Text style={[styles.customerChipText, selectedCustomer?._id === c._id && { color: DARK_BROWN }]}>{c.customerName}</Text>
-                <Text style={styles.customerChipSub}>{c.phoneNumber}</Text>
+                <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
+                <Text style={styles.changeCustomerBtnText}>Change</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
+            </View>
+          ) : (
+            <View>
+              <View style={styles.scanInputWrap}>
+                <MaterialCommunityIcons name="magnify" size={20} color={GOLD} style={{ marginRight: 4 }} />
+                <TextInput
+                  style={styles.scanInput}
+                  placeholder="Search by name, phone or code..."
+                  placeholderTextColor="#C4A97A"
+                  value={customerSearch}
+                  onChangeText={(t) => {
+                    setCustomerSearch(t);
+                    setShowCustomerDropdown(true);
+                  }}
+                  onFocus={() => setShowCustomerDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 150)}
+                  returnKeyType="search"
+                />
+                {customerSearch.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => { setCustomerSearch(''); setShowCustomerDropdown(true); }}
+                    style={{ padding: 4 }}
+                  >
+                    <MaterialCommunityIcons name="close-circle" size={18} color="#C4A97A" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {showCustomerDropdown && (
+                <View style={styles.autocompleteDropdown}>
+                  {filteredCustomers.length > 0 ? (
+                    filteredCustomers.map(c => (
+                      <TouchableOpacity
+                        key={c._id}
+                        style={styles.autocompleteItem}
+                        onPress={() => handleSelectCustomer(c)}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.autocompleteTitle}>{c.customerName}</Text>
+                          <Text style={styles.autocompleteSub}>{c.phoneNumber}{c.customerCode ? `  |  ${c.customerCode}` : ''}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))
+                  ) : (
+                    <View style={styles.autocompleteItem}>
+                      <Text style={styles.autocompleteSub}>No Line Stocker matches your search.</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+          )}
           {selectedCustomer && (
             <View style={styles.selectedCustomerInfo}>
               <View style={styles.infoRow}><Text style={styles.infoLabel}>Current Old Balance:</Text><Text style={styles.infoValue}>{Number(selectedCustomer.oldBalance).toFixed(3)}g</Text></View>
@@ -478,12 +553,12 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 40 },
   section: { backgroundColor: '#FFF', borderRadius: 16, padding: 16, marginBottom: 16, elevation: 2 },
   sectionTitle: { fontSize: 13, fontWeight: '800', color: '#8A6B3C', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
-  customerScroll: { flexDirection: 'row', marginBottom: 12 },
-  customerChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#E8D8B8', marginRight: 12, backgroundColor: '#FDFAF4' },
-  customerChipActive: { backgroundColor: GOLD, borderColor: GOLD },
-  customerChipText: { fontSize: 14, fontWeight: '700', color: DARK_BROWN },
-  customerChipSub: { fontSize: 11, color: '#8A6B3C', marginTop: 2 },
-  selectedCustomerInfo: { padding: 12, backgroundColor: '#F0E4CC', borderRadius: 10 },
+  selectedCustomerRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FDFAF4', borderRadius: 12, borderWidth: 1, borderColor: '#E8D8B8', paddingHorizontal: 14, paddingVertical: 12 },
+  selectedCustomerName: { fontSize: 15, fontWeight: '800', color: DARK_BROWN },
+  selectedCustomerSub: { fontSize: 12, color: '#8A6B3C', marginTop: 2 },
+  changeCustomerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#F0E4CC' },
+  changeCustomerBtnText: { fontSize: 12, fontWeight: '700', color: DARK_BROWN },
+  selectedCustomerInfo: { padding: 12, backgroundColor: '#F0E4CC', borderRadius: 10, marginTop: 12 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
   infoLabel: { fontSize: 12, color: DARK_BROWN, fontWeight: '600' },
   infoValue: { fontSize: 13, color: DARK_BROWN, fontWeight: '800' },

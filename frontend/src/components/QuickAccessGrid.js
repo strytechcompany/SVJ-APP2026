@@ -22,15 +22,6 @@ const MODULES = [
     screen: 'B2C',
   },
   {
-    key: 'B2B',
-    label: 'B2B',
-    icon: 'handshake',
-    bg: '#FFF8E1',
-    iconBg: '#3D2200',
-    iconColor: '#D4AF37',
-    screen: 'B2B',
-  },
-  {
     key: 'B2D',
     label: 'B2D',
     icon: 'account-multiple',
@@ -65,6 +56,15 @@ const MODULES = [
     iconBg: '#1B5E20',
     iconColor: '#FFFFFF',
     screen: 'Expenses',
+  },
+  {
+    key: 'LineStocker',
+    label: 'Line Stocker',
+    icon: 'truck-delivery',
+    bg: '#FFF8E1',
+    iconBg: '#3D2200',
+    iconColor: '#D4AF37',
+    screen: 'LineStockDashboard',
   },
 ];
 

@@ -9,141 +9,138 @@ const release = () => { _busy = false; };
 
 const generateHTML = (data) => {
   const { summaryCards, customerSales, plusSummary, debtPayable, debtReceivable, expenses, chitFunds, lineStock, metadata, calculations } = data;
-  
+
   let dateText = 'Today';
   if (metadata.mode === 'CUSTOM_DATE') dateText = new Date(metadata.selectedDate).toLocaleDateString('en-GB');
   else if (metadata.mode === 'MONTHLY') {
     const d = new Date(metadata.selectedDate);
-    dateText = d.toLocaleString('default', { month: 'short' }) + ' ' + d.getFullYear();
+    dateText = d.toLocaleString('default', { month: 'long' }) + ' ' + d.getFullYear();
   }
 
   const html = `
     <html>
       <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <style>
-          @page { size: 80mm auto; margin: 0; }
-          body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: flex-start; }
-          .receipt-container { width: 75mm; margin: 0 auto; padding: 0; box-sizing: border-box; font-family: monospace; font-size: 12px; font-weight: 600; color: #000; text-align: left; }
-          .center { text-align: center; }
-          .bold { font-weight: bold; }
-          .divider { border-bottom: 1px dashed #000; margin: 6px 0; }
-          .double-divider { border-bottom: 2px dashed #000; margin: 6px 0; }
-          .row { display: flex; justify-content: space-between; margin: 3px 0; }
-          .title { font-size: 14px; font-weight: bold; margin-bottom: 2px; }
-          .section-title { font-size: 12px; font-weight: bold; text-align: center; margin: 8px 0 4px; text-decoration: underline; text-transform: uppercase; }
-          
-          table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 12px; table-layout: fixed; font-weight: 600; color: #000; }
-          th, td { text-align: left; padding: 2px 1px; vertical-align: top; word-wrap: break-word; }
-          th { border-bottom: 1px dashed #000; font-weight: bold; }
+          @page { size: A4; margin: 15mm 14mm; }
+          * { box-sizing: border-box; }
+          body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Arial, sans-serif; color: #222; font-size: 12.5px; }
+
+          .header { text-align: center; border-bottom: 3px solid #4B2E05; padding-bottom: 12px; margin-bottom: 16px; }
+          .shop-name { font-size: 22px; font-weight: 800; color: #4B2E05; letter-spacing: 0.5px; }
+          .report-title { font-size: 13px; color: #8A6B3C; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+          .meta-row { display: flex; justify-content: space-between; margin-top: 10px; font-size: 11.5px; color: #555; }
+
+          .stat-grid { display: flex; gap: 10px; margin-bottom: 20px; }
+          .stat-box { flex: 1; background: #FBF7EE; border: 1px solid #E8D8B8; border-radius: 6px; padding: 10px 8px; text-align: center; }
+          .stat-label { font-size: 9.5px; color: #8A6B3C; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; }
+          .stat-value { font-size: 15px; color: #4B2E05; font-weight: 800; margin-top: 4px; }
+
+          .section { margin-bottom: 18px; page-break-inside: avoid; }
+          .section-title { font-size: 12.5px; font-weight: 800; color: #FFF; background: #4B2E05; padding: 6px 10px; border-radius: 4px 4px 0 0; letter-spacing: 0.3px; }
+
+          table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+          th { text-align: left; background: #F1E9D8; color: #4B2E05; font-weight: 700; padding: 6px 8px; border: 1px solid #E8D8B8; }
+          td { padding: 6px 8px; border: 1px solid #EEE; vertical-align: top; }
+          tr:nth-child(even) td { background: #FAFAFA; }
           .right { text-align: right; }
-          .green { color: #000; } /* Thermal printers are B&W */
-          .red { color: #000; }
-          
-          .calc-table { width: 100%; }
-          .calc-table td { padding: 3px 0; border-bottom: 1px dotted #ccc; font-size: 12px; font-weight: 600; color: #000; }
-          .calc-table td:last-child { text-align: right; font-weight: bold; }
-          .total-row td { border-bottom: 1px dashed #000; border-top: 1px dashed #000; font-size: 13px; font-weight: bold; }
+          .center { text-align: center; }
+          .green { color: #1E8449; }
+          .red { color: #C0392B; }
+          .sub { font-size: 9.5px; color: #999; }
+
+          .total-row td { background: #FBF7EE !important; font-weight: 800; border-top: 2px solid #4B2E05; }
+
+          .footer { text-align: center; font-size: 10px; color: #999; margin-top: 24px; border-top: 1px solid #EEE; padding-top: 10px; }
         </style>
       </head>
       <body>
-        <div class="receipt-container">
-        <div class="center title">SRI VAISHNAVI JEWELLERS</div>
-        <div class="center">BUSINESS REPORT</div>
-        <div class="divider"></div>
-        <div class="row"><div>Period:</div><div class="bold">${dateText}</div></div>
-        <div class="row"><div>Generated:</div><div>${new Date().toLocaleString('en-GB', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'2-digit'})}</div></div>
-        <div class="double-divider"></div>
-
-        <div class="section-title">SUMMARY</div>
-        <div class="row"><div>Stock Items:</div><div class="bold">${summaryCards.totalStockItems}</div></div>
-        <div class="row"><div>Stock Wt:</div><div class="bold">${summaryCards.totalStockWeight.toFixed(3)}g</div></div>
-        <div class="row"><div>Sales Count:</div><div class="bold">${summaryCards.totalSalesCount}</div></div>
-        <div class="row"><div>Cash Amt:</div><div class="bold">Rs.${summaryCards.currentCashAmount.toLocaleString('en-IN')}</div></div>
-        <div class="divider"></div>
-
-        <div class="section-title">1. CUSTOMER SALES</div>
-        <table>
-          <tr><th style="width: 45%;">Name/Item</th><th class="right">Wt(+%)</th></tr>
-          ${customerSales.map(s => `<tr>
-            <td>${s.customerName.substring(0,10)}<br/><span style="font-size:8px">${s.itemName}</span></td>
-            <td class="right">${s.weight}g<br/><span style="font-size:9px">(+${s.sriPlus}%)</span></td>
-          </tr>`).join('')}
-          <tr><td class="bold">TOTAL</td><td class="right bold">${customerSales.reduce((sum,i)=>sum+i.weight,0).toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="section-title">2. PLUS SUMMARY</div>
-        <table>
-          <tr><th>Plus</th><th class="center">Weight</th><th class="right">Profit</th></tr>
-          ${plusSummary.map(p => `<tr>
-            <td>${p.plus}%</td><td class="center">${p.totalWeight.toFixed(3)}g</td><td class="right">${p.profit.toFixed(3)}g</td>
-          </tr>`).join('')}
-          <tr><td colspan="2" class="bold">TOTAL PROFIT</td><td class="right bold">${calculations.customerSalesProfit.toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="section-title">3. DEBT PAYABLE</div>
-        <table>
-          <tr><th style="width: 60%;">Customer</th><th class="right">Advance</th></tr>
-          ${debtPayable.map(c => `<tr><td>${c.customerName.substring(0,15)}</td><td class="right">${c.advance.toFixed(3)}g</td></tr>`).join('')}
-          <tr><td class="bold">TOTAL PAYABLE</td><td class="right bold">${calculations.debtPayable.toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="section-title">4. DEBT RECEIVABLE</div>
-        <table>
-          <tr><th style="width: 60%;">Customer</th><th class="right">Old Bal</th></tr>
-          ${debtReceivable.map(c => `<tr><td>${c.customerName.substring(0,15)}</td><td class="right">${c.oldBalance.toFixed(3)}g</td></tr>`).join('')}
-          <tr><td class="bold">TOTAL REC.</td><td class="right bold">${calculations.debtReceivable.toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="section-title">5. EXPENSES</div>
-        <table>
-          <tr><th style="width: 65%;">Name</th><th class="right">Amt(Rs)</th></tr>
-          ${expenses.map(e => `<tr><td>${e.expenseName.substring(0,15)}</td><td class="right">${e.amount}</td></tr>`).join('')}
-          <tr><td class="bold">TOTAL</td><td class="right bold">${calculations.expensesTotal}</td></tr>
-        </table>
-
-        <div class="section-title">6. CHIT FUNDS</div>
-        <table>
-          <tr><th style="width: 50%;">Customer</th><th>Paid</th><th class="right">Gold</th></tr>
-          ${chitFunds.map(c => `<tr><td>${(c.customerId?.customerName||'').substring(0,10)}</td><td>${c.amount}</td><td class="right">${c.purchasedWeight.toFixed(3)}g</td></tr>`).join('')}
-          <tr><td colspan="2" class="bold">TOTAL</td><td class="right bold">${calculations.chitCollection.toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="section-title">7. LINE STOCKER</div>
-        <table>
-          <tr><th style="width: 45%;">Name</th><th>Stat</th><th class="right">Wt(g)</th></tr>
-          ${lineStock.map(ls => `<tr><td>${ls.customerName.substring(0,10)}</td><td>${ls.status.substring(0,3)}</td><td class="right">${ls.totalIssuedGram.toFixed(3)}</td></tr>`).join('')}
-          <tr><td colspan="2" class="bold">TOTAL OUT</td><td class="right bold">${calculations.lineStockOutstanding.toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="double-divider"></div>
-        <div class="center title">FINAL CALCULATION</div>
-        <div class="divider"></div>
-
-        <table class="calc-table">
-          <tr><td>Adjusted Stock (+)</td><td>${calculations.adjustedStockGrams.toFixed(3)}g</td></tr>
-          <tr><td>Cash Converted (+)</td><td>${calculations.cashConverted.toFixed(3)}g</td></tr>
-          <tr><td>Debt Receivable (+)</td><td>${calculations.debtReceivable.toFixed(3)}g</td></tr>
-          <tr><td>Debt Payable (-)</td><td>-${calculations.debtPayable.toFixed(3)}g</td></tr>
-          <tr><td>Chit Collection (+)</td><td>${calculations.chitCollection.toFixed(3)}g</td></tr>
-          <tr><td>Line Stock Out (-)</td><td>-${calculations.lineStockOutstanding.toFixed(3)}g</td></tr>
-          <tr class="total-row"><td>TOTAL HOLDING</td><td>${calculations.totalHolding.toFixed(3)}g</td></tr>
-        </table>
-
-        <div class="divider"></div>
-        <div class="section-title">PROFIT ANALYSIS</div>
-        <table class="calc-table">
-          <tr><td>Customer Sales Profit</td><td>${calculations.customerSalesProfit.toFixed(3)}g</td></tr>
-          <tr><td>Expense Gram Deduct</td><td>-${calculations.profitBalanceGram.toFixed(3)}g</td></tr>
-          <tr class="total-row"><td>NET PROFIT</td><td>${calculations.netProfit >= 0 ? '' : '-'}${Math.abs(calculations.netProfit).toFixed(3)}g</td></tr>
-        </table>
-        
-        <div class="divider"></div>
-        <div class="center" style="font-size: 9px; margin-top: 5px;">
-          Params: SRI ${metadata.sriBillPercent}% | GOLD Rs.${metadata.goldRate} | PROF Rs.${metadata.profitGoldRate}
+        <div class="header">
+          <div class="shop-name">SRI VAISHNAVI JEWELLERS</div>
+          <div class="report-title">Business Report</div>
+          <div class="meta-row">
+            <div>Period: <strong>${dateText}</strong></div>
+            <div>Generated: <strong>${new Date().toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })}</strong></div>
+          </div>
         </div>
-        <div class="center" style="font-size: 9px; margin-bottom: 10px;">End of Report</div>
+
+        <div class="stat-grid">
+          <div class="stat-box"><div class="stat-label">Stock Items</div><div class="stat-value">${summaryCards.totalStockItems}</div></div>
+          <div class="stat-box"><div class="stat-label">Stock Weight</div><div class="stat-value">${summaryCards.totalStockWeight.toFixed(3)}g</div></div>
+          <div class="stat-box"><div class="stat-label">Sales Count</div><div class="stat-value">${summaryCards.totalSalesCount}</div></div>
+          <div class="stat-box"><div class="stat-label">Cash Amount</div><div class="stat-value">₹${summaryCards.currentCashAmount.toLocaleString('en-IN')}</div></div>
         </div>
+
+        <div class="section">
+          <div class="section-title">1. Customer Sales (B2C, B2D)</div>
+          <table>
+            <tr><th>Customer</th><th>Item</th><th class="right">Weight (+Plus%)</th></tr>
+            ${customerSales.map(s => `<tr>
+              <td>${s.customerName}<div class="sub">${s.phoneNumber} | ${s.billNumber}</div></td>
+              <td>${s.itemName}</td>
+              <td class="right green">${s.weight}g (+${s.sriPlus}%)</td>
+            </tr>`).join('')}
+            <tr class="total-row"><td colspan="2">Total Sales</td><td class="right">${customerSales.reduce((s, i) => s + i.weight, 0).toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">2. Plus Summary</div>
+          <table>
+            <tr><th>Plus (%)</th><th class="center">Weight</th><th class="right">Profit</th></tr>
+            ${plusSummary.map(p => `<tr>
+              <td>${p.plus}%</td><td class="center">${p.totalWeight.toFixed(3)}g</td><td class="right green">${p.profit.toFixed(3)}g</td>
+            </tr>`).join('')}
+            <tr class="total-row"><td colspan="2">Total Profit</td><td class="right">${calculations.customerSalesProfit.toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">3. Debt Payable (Advance &gt; 0)</div>
+          <table>
+            <tr><th>Customer</th><th class="right">Advance</th></tr>
+            ${debtPayable.map(c => `<tr><td>${c.customerName}<div class="sub">${c.phoneNumber}</div></td><td class="right red">${c.advance.toFixed(3)}g</td></tr>`).join('')}
+            <tr class="total-row"><td>Total Payable</td><td class="right">${calculations.debtPayable.toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">4. Debt Receivable (Old Balance &gt; 0)</div>
+          <table>
+            <tr><th>Customer</th><th class="right">Old Balance</th></tr>
+            ${debtReceivable.map(c => `<tr><td>${c.customerName}<div class="sub">${c.phoneNumber}</div></td><td class="right green">${c.oldBalance.toFixed(3)}g</td></tr>`).join('')}
+            <tr class="total-row"><td>Total Receivable</td><td class="right">${calculations.debtReceivable.toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">5. Expenses</div>
+          <table>
+            <tr><th>Expense</th><th class="right">Amount</th></tr>
+            ${expenses.map(e => `<tr><td>${e.expenseName}<div class="sub">${e.expenseType}</div></td><td class="right red">₹${e.amount}</td></tr>`).join('')}
+            <tr class="total-row"><td>Total Expenses</td><td class="right">₹${calculations.expensesTotal}</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">6. Chit Funds</div>
+          <table>
+            <tr><th>Customer</th><th>Rate</th><th class="right">Amount</th><th class="right">Gold</th></tr>
+            ${chitFunds.map(c => `<tr><td>${c.customerId?.customerName || ''}</td><td>₹${c.goldRate}</td><td class="right">₹${c.amount}</td><td class="right green">${c.purchasedWeight.toFixed(3)}g</td></tr>`).join('')}
+            <tr class="total-row"><td colspan="2">Total</td><td class="right">₹${chitFunds.reduce((s, i) => s + i.amount, 0)}</td><td class="right">${calculations.chitCollection.toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">7. Line Stocker Report</div>
+          <table>
+            <tr><th>Customer</th><th>Status</th><th class="right">Weight</th></tr>
+            ${lineStock.map(ls => `<tr><td>${ls.customerName}</td><td>${ls.status}</td><td class="right ${ls.status === 'SETTLED' ? 'green' : 'red'}">${ls.totalIssuedGram.toFixed(3)}g</td></tr>`).join('')}
+            <tr class="total-row"><td colspan="2">Total Issued</td><td class="right">${calculations.lineStockOutstanding.toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="footer">End of Report — Sri Vaishnavi Jewellers</div>
       </body>
     </html>
   `;
@@ -155,8 +152,8 @@ export const ReportPrintService = {
     if (!acquire()) return;
     try {
       const html = generateHTML(data);
-      const { uri } = await Print.printToFileAsync({ html, margins: { left: 20, top: 20, right: 20, bottom: 20 } });
-      
+      const { uri } = await Print.printToFileAsync({ html });
+
       const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
       if (permissions.granted) {
         const fileName = `SriVaishnavi_Report_${new Date().getTime()}.pdf`;
@@ -180,7 +177,7 @@ export const ReportPrintService = {
     if (!acquire()) return;
     try {
       const html = generateHTML(data);
-      const { uri } = await Print.printToFileAsync({ html, margins: { left: 20, top: 20, right: 20, bottom: 20 } });
+      const { uri } = await Print.printToFileAsync({ html });
       await Sharing.shareAsync(uri, { UTI: '.pdf', mimeType: 'application/pdf', dialogTitle: 'Share via WhatsApp' });
     } finally {
       release();

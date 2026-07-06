@@ -27,12 +27,7 @@
     "plugins": [
       "@react-native-community/datetimepicker",
       "./plugins/with-usb-printer"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "5550a448-99da-4b5f-b37d-ce0bbf105de2"
-      }
-    },
-    "owner": "svj2026"
+    ]
+    
   }
 }

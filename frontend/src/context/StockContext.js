@@ -94,7 +94,6 @@ export const StockProvider = ({ children }) => {
         category: params.category ?? selectedCategory,
         page: reset ? 1 : pagination.page + 1,
         limit: 50,
-        scan: 'true',
       };
 
       console.log('[StockContext] fetchStocks request:', queryParams);

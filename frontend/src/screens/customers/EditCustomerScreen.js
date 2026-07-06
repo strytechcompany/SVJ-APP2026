@@ -29,8 +29,6 @@ function validate(values, customerType) {
   else if (!/^[6-9]\d{9}$/.test(phone) && !/^\+91[6-9]\d{9}$/.test(phone))
     errs.phoneNumber = 'Enter a valid 10-digit mobile number';
   if (!values.address.trim()) errs.address = 'Address is required';
-  if (customerType === 'B2B' && !values.shopName.trim())
-    errs.shopName = 'Shop name is required for B2B';
   if (customerType === 'B2D' && !values.dealerCompanyName.trim())
     errs.dealerCompanyName = 'Dealer company name is required for B2D';
   return errs;

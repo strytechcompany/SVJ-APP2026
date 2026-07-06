@@ -12,7 +12,7 @@ const CashLedgerSchema = new mongoose.Schema(
       required: true,
     },
     source: {
-      type: String, // e.g. "B2B Sales", "B2C Sales", "Line Stock Settlement", "Chit Fund", "Daily Expense", "Manual Adjustment"
+      type: String, // e.g. "B2C Sales", "B2D Sales", "Line Stock Settlement", "Chit Fund", "Daily Expense", "Manual Adjustment"
       required: true,
     },
     referenceId: {

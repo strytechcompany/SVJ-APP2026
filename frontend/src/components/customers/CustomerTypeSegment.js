@@ -12,10 +12,10 @@ const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
 const BG = '#F8F4E8';
 
-const TYPES = ['B2B', 'B2C', 'B2D', 'LINE STOCKER'];
+const TYPES = ['B2C', 'B2D', 'LINE STOCKER'];
 
 export default function CustomerTypeSegment({ selected, onSelect }) {
-  const segmentWidth = (Dimensions.get('window').width - 64) / 4;
+  const segmentWidth = (Dimensions.get('window').width - 64) / 3;
   const animX = useRef(new Animated.Value(TYPES.indexOf(selected) * segmentWidth)).current;
 
   useEffect(() => {

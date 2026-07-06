@@ -96,10 +96,10 @@ exports.getAllStock = async (req, res) => {
       scan,
     });
 
-    // When called from a scanner, skip the isActive filter so all items are searchable.
-    // isAvailable is NOT filtered here — items issued via line stock (isAvailable=false)
-    // still belong in the stock view so the owner can track them.
-    const query = scan === 'true' ? {} : { isActive: true };
+    // When called from a scanner, skip the isActive/isAvailable filters so all items are searchable.
+    // Otherwise, items fully issued out (e.g. to a Line Stocker, isAvailable=false) are hidden
+    // from the stock view until they're settled back in (unsold returns flip isAvailable to true).
+    const query = scan === 'true' ? {} : { isActive: true, isAvailable: { $ne: false } };
 
     // Category filter
     if (category && category !== 'All') {
@@ -208,7 +208,8 @@ exports.getStockSummary = async (req, res) => {
       0
     );
 
-    const stocks = await Stock.find({}).lean();
+    // Exclude stock fully issued out (e.g. to a Line Stocker) — matches getAllStock's view.
+    const stocks = await Stock.find({ isAvailable: { $ne: false } }).lean();
     console.log('[getStockSummary] total records fetched from MongoDB:', stocks.length);
 
     const summary = stocks.reduce((acc, doc) => {
@@ -236,6 +237,7 @@ exports.getStockById = async (req, res) => {
     const stock = await Stock.findOne({
       _id: req.params.id,
       isActive: true,
+      isAvailable: { $ne: false },
     }).populate('createdBy', 'name');
 
     if (!stock) {

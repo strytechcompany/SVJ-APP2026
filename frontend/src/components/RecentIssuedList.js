@@ -6,13 +6,11 @@ const GOLD = '#D4AF37';
 const HEADER_BG = '#3D2200';
 
 const TYPE_COLORS = {
-  B2B: '#FFF8E1',
   B2C: '#FFF3E0',
   B2D: '#EEEEEE',
 };
 
 const TYPE_TEXT_COLORS = {
-  B2B: '#5C3A00',
   B2C: '#7B3F00',
   B2D: '#333',
 };

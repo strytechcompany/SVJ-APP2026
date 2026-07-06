@@ -22,7 +22,7 @@ const OrderSchema = new mongoose.Schema(
     },
     customerType: {
       type: String,
-      enum: ['B2C', 'B2B', 'B2D', 'LINE_STOCKER'],
+      enum: ['B2C', 'B2D', 'LINE_STOCKER'],
       required: true,
     },
 

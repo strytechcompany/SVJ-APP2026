@@ -8,7 +8,7 @@ export const TransactionProvider = ({ children }) => {
   const startTransaction = useCallback((customer, type) => {
     setCurrentTransaction({
       customer,
-      type, // 'B2B', 'B2C', 'B2D'
+      type, // 'B2C', 'B2D'
       timestamp: new Date().toISOString(),
     });
   }, []);

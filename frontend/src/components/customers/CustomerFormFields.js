@@ -3,6 +3,7 @@ import {
   View,
   Text,
   TextInput,
+  TouchableOpacity,
   StyleSheet,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -93,21 +94,6 @@ export default function CustomerFormFields({
         {errors.phoneNumber ? <Text style={styles.errorText}>{errors.phoneNumber}</Text> : null}
       </View>
 
-      {/* Shop Name — B2B only */}
-      {customerType === 'B2B' && (
-        <View style={styles.fieldGroup}>
-          <FieldLabel required>Shop Name</FieldLabel>
-          <IconInput
-            icon="store-outline"
-            value={values.shopName}
-            onChangeText={set('shopName')}
-            placeholder="Enter business name"
-            error={errors.shopName}
-          />
-          {errors.shopName ? <Text style={styles.errorText}>{errors.shopName}</Text> : null}
-        </View>
-      )}
-
       {/* Dealer Company — B2D only */}
       {customerType === 'B2D' && (
         <View style={styles.fieldGroup}>
@@ -123,8 +109,62 @@ export default function CustomerFormFields({
         </View>
       )}
 
-      {/* GST (B2B & B2D optional) */}
-      {(customerType === 'B2B' || customerType === 'B2D') && (
+      {/* Customer Category — B2C only */}
+      {customerType === 'B2C' && (
+        <View style={styles.fieldGroup}>
+          <FieldLabel required>Customer Category</FieldLabel>
+          <View style={styles.categoryRow}>
+            <TouchableOpacity
+              style={[
+                styles.categoryOption,
+                values.customerCategory === 'PLUS' && styles.categoryOptionActive,
+              ]}
+              onPress={() => onChange('customerCategory', 'PLUS')}
+              activeOpacity={0.85}
+            >
+              <MaterialCommunityIcons
+                name="star-circle-outline"
+                size={18}
+                color={values.customerCategory === 'PLUS' ? '#FFFFFF' : GOLD}
+              />
+              <Text
+                style={[
+                  styles.categoryOptionText,
+                  values.customerCategory === 'PLUS' && styles.categoryOptionTextActive,
+                ]}
+              >
+                Plus User
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.categoryOption,
+                values.customerCategory === 'WASTAGE' && styles.categoryOptionActive,
+              ]}
+              onPress={() => onChange('customerCategory', 'WASTAGE')}
+              activeOpacity={0.85}
+            >
+              <MaterialCommunityIcons
+                name="recycle-variant"
+                size={18}
+                color={values.customerCategory === 'WASTAGE' ? '#FFFFFF' : GOLD}
+              />
+              <Text
+                style={[
+                  styles.categoryOptionText,
+                  values.customerCategory === 'WASTAGE' && styles.categoryOptionTextActive,
+                ]}
+              >
+                Wastage User
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {errors.customerCategory ? <Text style={styles.errorText}>{errors.customerCategory}</Text> : null}
+        </View>
+      )}
+
+      {/* GST (B2D optional) */}
+      {customerType === 'B2D' && (
         <View style={styles.fieldGroup}>
           <FieldLabel>GST Number</FieldLabel>
           <IconInput
@@ -137,14 +177,14 @@ export default function CustomerFormFields({
         </View>
       )}
 
-      {/* Address */}
+      {/* Address (optional) */}
       <View style={styles.fieldGroup}>
-        <FieldLabel required>Address</FieldLabel>
+        <FieldLabel>Address</FieldLabel>
         <IconInput
           icon="map-marker-outline"
           value={values.address}
           onChangeText={set('address')}
-          placeholder="Full billing address..."
+          placeholder="Full billing address (optional)..."
           multiline
           error={errors.address}
         />
@@ -258,6 +298,34 @@ const styles = StyleSheet.create({
   inputMulti: {
     height: '100%',
     textAlignVertical: 'top',
+  },
+  categoryRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  categoryOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FDFAF4',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E8D8B8',
+    height: 46,
+  },
+  categoryOptionActive: {
+    backgroundColor: DARK_BROWN,
+    borderColor: DARK_BROWN,
+  },
+  categoryOptionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: DARK_BROWN,
+  },
+  categoryOptionTextActive: {
+    color: '#FFFFFF',
   },
   balanceRow: {
     flexDirection: 'row',

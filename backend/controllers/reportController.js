@@ -46,12 +46,12 @@ exports.getReportData = async (req, res) => {
 
     const totalSalesCount = await Transaction.countDocuments({
       createdAt: dateFilter,
-      transactionType: { $in: ['B2B', 'B2C', 'B2D'] }
+      transactionType: { $in: ['B2C', 'B2D'] }
     });
 
     // 2. Customer Sales Table (Itemized)
     const customerSalesAgg = await Transaction.aggregate([
-      { $match: { createdAt: dateFilter, transactionType: { $in: ['B2B', 'B2C', 'B2D'] } } },
+      { $match: { createdAt: dateFilter, transactionType: { $in: ['B2C', 'B2D'] } } },
       { $unwind: "$issueItems" },
       { $lookup: { from: "customers", localField: "customerId", foreignField: "_id", as: "customer" } },
       { $unwind: "$customer" },
@@ -72,7 +72,7 @@ exports.getReportData = async (req, res) => {
 
     // 3. Plus Summary Table
     const plusSummaryAgg = await Transaction.aggregate([
-      { $match: { createdAt: dateFilter, transactionType: { $in: ['B2B', 'B2C', 'B2D'] } } },
+      { $match: { createdAt: dateFilter, transactionType: { $in: ['B2C', 'B2D'] } } },
       { $unwind: "$issueItems" },
       { $group: { 
           _id: "$issueItems.plus", 

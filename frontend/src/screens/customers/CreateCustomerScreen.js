@@ -30,6 +30,7 @@ const EMPTY_FORM = {
   dealerCompanyName: '',
   gstNumber: '',
   address: '',
+  customerCategory: '',
   oldBalance: '0',
   advance: '0',
   remarks: '',
@@ -42,11 +43,10 @@ function validate(values, customerType) {
   if (!phone) errs.phoneNumber = 'Phone number is required';
   else if (!/^[6-9]\d{9}$/.test(phone) && !/^\+91[6-9]\d{9}$/.test(phone))
     errs.phoneNumber = 'Enter a valid 10-digit mobile number';
-  if (!values.address.trim()) errs.address = 'Address is required';
-  if (customerType === 'B2B' && !values.shopName.trim())
-    errs.shopName = 'Shop name is required for B2B';
   if (customerType === 'B2D' && !values.dealerCompanyName.trim())
     errs.dealerCompanyName = 'Dealer company name is required for B2D';
+  if (customerType === 'B2C' && !values.customerCategory)
+    errs.customerCategory = 'Please select Plus User or Wastage User';
   const ob = parseFloat(values.oldBalance);
   if (isNaN(ob) || ob < 0) errs.oldBalance = 'Must be >= 0';
   const adv = parseFloat(values.advance);
@@ -89,6 +89,7 @@ export default function CreateCustomerScreen({ navigation, route }) {
       shopName: '',
       dealerCompanyName: '',
       gstNumber: '',
+      customerCategory: '',
     }));
   };
 
@@ -111,6 +112,7 @@ export default function CreateCustomerScreen({ navigation, route }) {
         dealerCompanyName: values.dealerCompanyName.trim(),
         gstNumber: values.gstNumber.trim(),
         address: values.address.trim(),
+        customerCategory: customerType === 'B2C' ? values.customerCategory : '',
         oldBalance: parseFloat(values.oldBalance) || 0,
         advance: parseFloat(values.advance) || 0,
         remarks: values.remarks.trim(),

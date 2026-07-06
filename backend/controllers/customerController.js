@@ -12,17 +12,18 @@ exports.createCustomer = async (req, res) => {
       dealerCode,
       gstNumber,
       address,
+      customerCategory,
       oldBalance,
       advance,
       remarks,
     } = req.body;
 
     // Type-specific required fields
-    if (customerType === 'B2B' && !shopName?.trim()) {
-      return res.status(400).json({ success: false, message: 'Shop Name is required for B2B customers' });
-    }
     if (customerType === 'B2D' && !dealerCompanyName?.trim()) {
       return res.status(400).json({ success: false, message: 'Dealer Company Name is required for B2D customers' });
+    }
+    if (customerType === 'B2C' && !customerCategory) {
+      return res.status(400).json({ success: false, message: 'Please specify whether the customer is a Plus User or Wastage User' });
     }
 
     const customerPayload = {
@@ -34,6 +35,7 @@ exports.createCustomer = async (req, res) => {
       dealerCode: dealerCode?.trim() || '',
       gstNumber: gstNumber?.trim() || '',
       address: address?.trim() || '',
+      customerCategory: customerType === 'B2C' ? customerCategory : undefined,
       oldBalance: parseFloat(oldBalance) || 0,
       advance: parseFloat(advance) || 0,
       remarks: remarks?.trim() || '',
@@ -257,7 +259,7 @@ exports.getByType = async (req, res) => {
     const { type } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    if (!['B2C', 'B2B', 'B2D', 'LINE_STOCKER'].includes(type)) {
+    if (!['B2C', 'B2D', 'LINE_STOCKER'].includes(type)) {
       return res.status(400).json({ success: false, message: 'Invalid customer type' });
     }
 

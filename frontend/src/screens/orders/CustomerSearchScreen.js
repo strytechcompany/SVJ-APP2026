@@ -14,7 +14,6 @@ const HEADER_BG = '#3D2200';
 
 const TYPE_META = {
   B2C:         { label: 'B2C',  color: '#1565C0', bg: '#E3F2FD' },
-  B2B:         { label: 'B2B',  color: '#2E7D32', bg: '#E8F5E9' },
   B2D:         { label: 'B2D',  color: '#6A1B9A', bg: '#F3E5F5' },
   LINE_STOCKER:{ label: 'LS',   color: '#E65100', bg: '#FFF3E0' },
 };

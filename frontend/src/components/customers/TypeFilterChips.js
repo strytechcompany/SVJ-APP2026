@@ -4,7 +4,7 @@ import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-nati
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
 
-const FILTERS = ['All', 'B2B', 'B2C', 'B2D', 'CHIT FUND', 'LINE STOCKER'];
+const FILTERS = ['All', 'B2C', 'B2D', 'CHIT FUND', 'LINE STOCKER'];
 
 export default function TypeFilterChips({ selected, onSelect }) {
   return (

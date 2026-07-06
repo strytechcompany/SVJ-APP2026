@@ -6,7 +6,7 @@ const CustomerSchema = new mongoose.Schema(
     customerType: {
       type: String,
       required: [true, 'Customer type is required'],
-      enum: ['B2C', 'B2B', 'B2D', 'LINE_STOCKER'],
+      enum: ['B2C', 'B2D', 'LINE_STOCKER'],
     },
     customerCode: {
       type: String,
@@ -45,8 +45,15 @@ const CustomerSchema = new mongoose.Schema(
     },
     address: {
       type: String,
-      required: [true, 'Address is required'],
       trim: true,
+      default: '',
+    },
+    customerCategory: {
+      type: String,
+      enum: {
+        values: ['PLUS', 'WASTAGE'],
+        message: 'Customer category must be either Plus User or Wastage User',
+      },
     },
     oldBalance: {
       type: Number,
@@ -93,7 +100,6 @@ const CustomerSchema = new mongoose.Schema(
 
 const CUSTOMER_CODE_PREFIXES = {
   B2C: 'B2C',
-  B2B: 'B2B',
   B2D: 'B2D',
   LINE_STOCKER: 'LS',
 };
@@ -162,7 +168,7 @@ CustomerSchema.statics.generateCustomerCode = async function (customerType) {
   throw new Error(`Unable to generate unique customer code for ${customerType}`);
 };
 
-// Auto-generate customerCode per type: B2C00001, B2B00001, B2D00001
+// Auto-generate customerCode per type: B2C00001, B2D00001
 CustomerSchema.pre('save', async function (next) {
   // Enforce Balance Rule: A customer cannot have both Old Balance and Advance at the same time.
   const currentAdvance = this.advance || 0;

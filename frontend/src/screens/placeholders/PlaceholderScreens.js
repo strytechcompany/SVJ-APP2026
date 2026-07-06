@@ -62,9 +62,6 @@ const styles = StyleSheet.create({
 export function B2CScreen({ navigation }) {
   return <PlaceholderScreen title="B2C" icon="account-circle" navigation={navigation} />;
 }
-export function B2BScreen({ navigation }) {
-  return <PlaceholderScreen title="B2B" icon="handshake" navigation={navigation} />;
-}
 export function B2DScreen({ navigation }) {
   return <PlaceholderScreen title="B2D" icon="account-multiple" navigation={navigation} />;
 }

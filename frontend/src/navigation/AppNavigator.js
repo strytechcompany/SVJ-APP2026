@@ -155,16 +155,6 @@ export default function AppNavigator() {
 
             {/* Transactions Module */}
             <Stack.Screen
-              name="B2B"
-              component={TransactionListScreen}
-              initialParams={{ type: 'B2B' }}
-            />
-            <Stack.Screen
-              name="B2BCalculation"
-              component={TransactionCalculationScreen}
-              initialParams={{ type: 'B2B' }}
-            />
-            <Stack.Screen
               name="B2C"
               component={TransactionListScreen}
               initialParams={{ type: 'B2C' }}

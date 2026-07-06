@@ -17,7 +17,7 @@ const issuedRecordSchema = new mongoose.Schema(
     },
     issueType: {
       type: String,
-      enum: ['B2B', 'B2C', 'B2D'],
+      enum: ['B2C', 'B2D'],
       required: true,
     },
   },

@@ -22,7 +22,7 @@ const DARK_BROWN = '#5C3A00';
 const BG = '#F8F4E8';
 
 export default function TransactionListScreen({ route, navigation }) {
-  const { type } = route.params; // 'B2B', 'B2C', 'B2D'
+  const { type } = route.params; // 'B2C', 'B2D'
   const insets = useSafeAreaInsets();
   const topPad = insets.top || (Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 44);
 

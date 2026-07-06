@@ -28,7 +28,7 @@ export default function TransactionManagementScreen({ navigation }) {
   const [deletingId, setDeletingId] = useState(null);
   const [loadingEditId, setLoadingEditId] = useState(null);
 
-  const filters = ['All', 'B2B', 'B2C', 'B2D', 'LINE STOCK', 'CHIT FUND', 'EXPENSE', 'Today', 'This Week', 'This Month'];
+  const filters = ['All', 'B2C', 'B2D', 'LINE STOCK', 'CHIT FUND', 'EXPENSE', 'Today', 'This Week', 'This Month'];
 
   useEffect(() => {
     fetchTransactions();
@@ -179,7 +179,7 @@ export default function TransactionManagementScreen({ navigation }) {
 
     if (activeFilter !== 'All') {
       const now = new Date();
-      if (['B2B', 'B2C', 'B2D', 'CHIT FUND', 'EXPENSE', 'LINE STOCK'].includes(activeFilter)) {
+      if (['B2C', 'B2D', 'CHIT FUND', 'EXPENSE', 'LINE STOCK'].includes(activeFilter)) {
         data = data.filter(t => t.transactionType === activeFilter);
       } else if (activeFilter === 'Today') {
         data = data.filter(t => new Date(t.createdAt).toDateString() === now.toDateString());

@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, StatusBar, Platform, TextInput, Alert
+  ActivityIndicator, StatusBar, Platform, Alert
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { reportsAPI } from '../../services/api';
 import { ReportPrintService } from '../../services/ReportPrintService';
-import { useSettings } from '../../context/SettingsContext';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -31,28 +29,9 @@ export default function ReportsScreen({ navigation }) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
   
-  // Custom Calculation Inputs
-  const { settings } = useSettings();
-  const [sriBillPercent, setSriBillPercent] = useState('');
-  const [goldRate, setGoldRate] = useState('');
-  const [profitGoldRate, setProfitGoldRate] = useState('');
-
-  useEffect(() => {
-    if (settings) {
-      setSriBillPercent(settings.sriBill.defaultPercent.toString());
-      setGoldRate(settings.goldRate.ratePerGram.toString());
-      setProfitGoldRate(settings.reportSettings.defaultProfitGoldRate.toString());
-    }
-  }, [settings]);
-
   useEffect(() => {
     fetchReports('TODAY');
   }, []);
-
-  const saveInputs = async (key, val) => {
-    // We only update local state during viewing. 
-    // If they want to save globally they do it in Settings.
-  };
 
   const fetchReports = async (fetchMode, dateObj = selectedDate) => {
     setLoading(true);
@@ -93,40 +72,25 @@ export default function ReportsScreen({ navigation }) {
   const handleExportReport = async (actionType) => {
     if (!data) return;
     setPrinting(true);
-    
-    // Calculate the dynamic derived values to pass to print service
-    const gr = parseFloat(goldRate) || 0;
-    const pgr = parseFloat(profitGoldRate) || 0;
-    const sbp = parseFloat(sriBillPercent) || 0;
 
-    const adjustedStockGrams = data.summaryCards.totalStockWeight * (sbp / 100);
-    const cashConverted = gr > 0 ? (data.summaryCards.currentCashAmount / gr) : 0;
-    
+    // Calculate the dynamic derived values to pass to print service
     let debtReceivable = 0; data.debtReceivable.forEach(c => debtReceivable += c.oldBalance);
     let debtPayable = 0; data.debtPayable.forEach(c => debtPayable += c.advance);
     let chitCollection = 0; data.chitFunds.forEach(c => chitCollection += c.purchasedWeight);
     let lineStockOutstanding = 0; data.lineStock.forEach(ls => lineStockOutstanding += ls.totalIssuedGram);
 
-    const totalHolding = adjustedStockGrams + cashConverted + debtReceivable - debtPayable + chitCollection - lineStockOutstanding;
-
     let customerSalesProfit = 0; data.plusSummary.forEach(p => customerSalesProfit += p.profit);
     let expensesTotal = 0; data.expenses.forEach(e => expensesTotal += e.amount);
-    const profitBalanceGram = pgr > 0 ? (expensesTotal / pgr) : 0;
-    const netProfit = customerSalesProfit - profitBalanceGram;
 
     const exportData = {
       ...data,
       metadata: {
         mode,
         selectedDate,
-        sriBillPercent,
-        goldRate,
-        profitGoldRate
       },
       calculations: {
-        adjustedStockGrams, cashConverted, debtReceivable, debtPayable, 
-        chitCollection, lineStockOutstanding, totalHolding,
-        customerSalesProfit, expensesTotal, profitBalanceGram, netProfit
+        debtReceivable, debtPayable, chitCollection, lineStockOutstanding,
+        customerSalesProfit, expensesTotal,
       }
     };
 
@@ -173,15 +137,6 @@ export default function ReportsScreen({ navigation }) {
   const renderCalculations = () => {
     if (!data) return null;
 
-    const gr = parseFloat(goldRate) || 0;
-    const pgr = parseFloat(profitGoldRate) || 0;
-    const sbp = parseFloat(sriBillPercent) || 0;
-
-    // Derived values
-    const adjustedStockGrams = data.summaryCards.totalStockWeight * (sbp / 100);
-    const adjustedStockRupees = adjustedStockGrams * gr;
-    const cashConverted = gr > 0 ? (data.summaryCards.currentCashAmount / gr) : 0;
-    
     let debtReceivable = 0;
     data.debtReceivable.forEach(c => debtReceivable += c.oldBalance);
 
@@ -197,10 +152,6 @@ export default function ReportsScreen({ navigation }) {
     // In a real app we'd map outstanding from LineStock transactions if available.
     data.lineStock.forEach(ls => lineStockOutstanding += ls.totalIssuedGram);
 
-    // Business Holding Formula: Adjusted Stock + Cash Converted + Debt Receivable - Debt Payable + Chit Collection - Line Stock Outstanding
-    // Note: User requested + Chit Collection in the feedback
-    const totalHolding = adjustedStockGrams + cashConverted + debtReceivable - debtPayable + chitCollection - lineStockOutstanding;
-
     // Profit Section
     let customerSalesProfit = 0;
     data.plusSummary.forEach(p => customerSalesProfit += p.profit);
@@ -208,16 +159,11 @@ export default function ReportsScreen({ navigation }) {
     let expensesTotal = 0;
     data.expenses.forEach(e => expensesTotal += e.amount);
 
-    const profitBalanceGram = pgr > 0 ? (expensesTotal / pgr) : 0;
-    
-    // Net Profit: Customer Sales Profit - Expense (convert into gram)
-    const netProfit = customerSalesProfit - profitBalanceGram;
-
     return (
       <>
         {/* SECTION 1: CUSTOMER SALES */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>1. CUSTOMER SALES (B2B, B2C, B2D)</Text>
+          <Text style={styles.sectionTitle}>1. CUSTOMER SALES (B2C, B2D)</Text>
           {data.customerSales.map((sale, idx) => (
             <View key={idx} style={styles.tableRow}>
               <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{sale.customerName}</Text><Text style={styles.rowSub}>{sale.phoneNumber} | {sale.billNumber}</Text></View>
@@ -313,43 +259,6 @@ export default function ReportsScreen({ navigation }) {
           <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Issued</Text><Text style={styles.calcValueTotal}>{lineStockOutstanding.toFixed(3)}g</Text></View>
         </View>
 
-        {/* SECTION 8: BUSINESS CALCULATION SUMMARY */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>8. BUSINESS CALCULATION SUMMARY</Text>
-          
-          <View style={styles.inputRow}>
-            <Text style={styles.inputLabel}>SRI BILL (%)</Text>
-            <TextInput style={styles.input} keyboardType="numeric" value={sriBillPercent} onChangeText={t => { setSriBillPercent(t); saveInputs('sriBillPercent', t); }} />
-          </View>
-          <View style={styles.inputRow}>
-            <Text style={styles.inputLabel}>GOLD RATE (₹/g)</Text>
-            <TextInput style={styles.input} keyboardType="numeric" value={goldRate} onChangeText={t => { setGoldRate(t); saveInputs('goldRate', t); }} />
-          </View>
-          <View style={styles.inputRow}>
-            <Text style={styles.inputLabel}>PROFIT GOLD RATE</Text>
-            <TextInput style={styles.input} keyboardType="numeric" value={profitGoldRate} onChangeText={t => { setProfitGoldRate(t); saveInputs('profitGoldRate', t); }} />
-          </View>
-
-          <View style={styles.divider} />
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Adjusted Stock (+)</Text><Text style={styles.calcValue}>{adjustedStockGrams.toFixed(3)}g</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Cash Converted (+)</Text><Text style={styles.calcValue}>{cashConverted.toFixed(3)}g</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Debt Receivable (+)</Text><Text style={styles.calcValue}>{debtReceivable.toFixed(3)}g</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Debt Payable (-)</Text><Text style={[styles.calcValue, { color: '#E74C3C' }]}>-{debtPayable.toFixed(3)}g</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Chit Collection (+)</Text><Text style={[styles.calcValue, { color: '#27AE60' }]}>{chitCollection.toFixed(3)}g</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Line Stock Out (-) </Text><Text style={[styles.calcValue, { color: '#E74C3C' }]}>-{lineStockOutstanding.toFixed(3)}g</Text></View>
-          <View style={styles.divider} />
-          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>TOTAL HOLDING</Text><Text style={styles.calcValueTotal}>{totalHolding.toFixed(3)}g</Text></View>
-        </View>
-
-        {/* SECTION 9: PROFIT ANALYSIS */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>PROFIT ANALYSIS</Text>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Customer Sales Profit</Text><Text style={styles.calcValue}>{customerSalesProfit.toFixed(3)}g</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Expenses Total</Text><Text style={styles.calcValue}>₹{expensesTotal}</Text></View>
-          <View style={styles.calcRow}><Text style={styles.calcLabel}>Expense Gram Deduct</Text><Text style={[styles.calcValue, { color: '#E74C3C' }]}>-{profitBalanceGram.toFixed(3)}g</Text></View>
-          <View style={styles.divider} />
-          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>NET PROFIT</Text><Text style={[styles.calcValueTotal, { color: netProfit >= 0 ? '#27AE60' : '#E74C3C' }]}>{netProfit.toFixed(3)}g</Text></View>
-        </View>
       </>
     );
   };
@@ -453,12 +362,7 @@ const styles = StyleSheet.create({
   cardValue: { fontSize: 18, color: DARK_BROWN, fontWeight: '800', marginTop: 8 },
   section: { backgroundColor: '#FFF', padding: 16, borderRadius: 12, marginBottom: 16, elevation: 2 },
   sectionTitle: { fontSize: 14, fontWeight: '800', color: DARK_BROWN, marginBottom: 12 },
-  inputRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  inputLabel: { fontSize: 13, color: '#666', fontWeight: '700' },
-  input: { backgroundColor: '#F5F5F5', width: 120, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, fontSize: 14, color: DARK_BROWN, textAlign: 'right' },
   calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  calcLabel: { fontSize: 13, color: '#444' },
-  calcValue: { fontSize: 14, color: DARK_BROWN, fontWeight: '700' },
   divider: { height: 1, backgroundColor: '#EEE', marginVertical: 12 },
   calcLabelTotal: { fontSize: 14, color: DARK_BROWN, fontWeight: '800' },
   calcValueTotal: { fontSize: 18, color: DARK_BROWN, fontWeight: '900' },

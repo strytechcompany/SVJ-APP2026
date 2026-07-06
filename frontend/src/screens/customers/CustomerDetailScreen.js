@@ -23,7 +23,6 @@ const BG = '#F8F4E8';
 
 const TYPE_COLORS = {
   B2C: { bg: '#FFF3E0', text: '#E65100', border: '#FFCC80' },
-  B2B: { bg: '#E8F5E9', text: '#2E7D32', border: '#A5D6A7' },
   B2D: { bg: '#EDE7F6', text: '#4527A0', border: '#CE93D8' },
 };
 

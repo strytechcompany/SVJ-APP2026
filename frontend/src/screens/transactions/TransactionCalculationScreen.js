@@ -18,6 +18,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const topPad = insets.top || (Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 44);
   const { type, customerId, editTransactionId = null, prefilledData = null } = route.params || {};
+  const isB2D = type === 'B2D';
   const { clearTransaction } = useTransaction();
   const { goldRate: dashGoldRate } = useDashboard();
 
@@ -341,9 +342,9 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     return bill > 0 ? (bill - cost) : 0;
   }, [issueSRIBill, issueSRICost]);
 
-  const currentIssuePurity = useMemo(() => {
+  const currentIssueProfit = useMemo(() => {
     const w = parseFloat(issueWeight) || 0;
-    return w * currentIssuePlus;
+    return w * (currentIssuePlus / 100);
   }, [issueWeight, currentIssuePlus]);
 
   const autoIssueAmount = useMemo(() => {
@@ -374,7 +375,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       sriCost: parseFloat(issueSRICost) || 0,
       sriBill: parseFloat(issueSRIBill),
       plus: currentIssuePlus,
-      purity: currentIssuePurity,
+      purity: currentIssueProfit,
       amount: activeIssueAmount
     };
     setIssueItems([...issueItems, newItem]);
@@ -574,6 +575,9 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
   if (!customer) return <View style={styles.container} />;
 
+  // Wastage-category B2C customers get a stripped-down calculation flow
+  const isWastage = type === 'B2C' && customer.customerCategory === 'WASTAGE';
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
@@ -655,9 +659,15 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         </View>
 
         {/* Issue Entry */}
+        {isWastage && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
-          
+        </View>
+        )}
+        {!isB2D && !isWastage && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Issue Product</Text>
+
           <View style={{zIndex: 100}}>
             <Text style={styles.inputLabel}>Enter QR Code to Search Stock</Text>
             <View style={styles.barcodeRow}>
@@ -758,8 +768,8 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               <Text style={styles.calcValue}>{currentIssuePlus.toFixed(3)}</Text>
             </View>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Purity (Auto)</Text>
-              <Text style={styles.calcValue}>{currentIssuePurity.toFixed(3)} g</Text>
+              <Text style={styles.inputLabel}>Profit</Text>
+              <Text style={styles.calcValue}>{currentIssueProfit.toFixed(3)} g</Text>
             </View>
           </View>
 
@@ -767,9 +777,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             <Text style={styles.actionBtnText}>Issue Item</Text>
           </TouchableOpacity>
         </View>
+        )}
 
         {/* Issue List */}
-        {issueItems.map(item => (
+        {!isB2D && !isWastage && issueItems.map(item => (
           <View key={item.id} style={styles.listItem}>
             <View style={styles.listTextCol}>
               <Text style={styles.listTitle}>{item.itemName || 'Item'} ({item.weight.toFixed(3)}g)</Text>
@@ -782,6 +793,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         ))}
 
         {/* Receipt Entry */}
+        {isB2D ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Receipt</Text>
+            <Text style={styles.inputLabel}>Item Name</Text>
+          </View>
+        ) : (
         <View style={[styles.card, {zIndex: -1}]}>
           <Text style={styles.cardTitle}>Receipt Entry</Text>
           <View style={styles.gridRow}>
@@ -828,6 +845,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             <Text style={styles.actionBtnText}>+ Add Receipt Item</Text>
           </TouchableOpacity>
         </View>
+        )}
 
         {/* Receipt List */}
         {receiptItems.map(item => (
@@ -865,6 +883,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         )}
 
         {/* GST */}
+        {!isB2D && !isWastage && (
         <View style={[styles.card, {zIndex: -2}]}>
           <View style={styles.gridRow}>
             <View style={[styles.gridItem, {alignItems: 'center', justifyContent: 'center'}]}>
@@ -902,8 +921,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             </View>
           )}
         </View>
+        )}
 
         {/* Payment Collection */}
+        {!isB2D && !isWastage && (
         <View style={[styles.card, {zIndex: -3}]}>
           <Text style={styles.cardTitle}>Payment Collection</Text>
           <View style={{ marginBottom: 12 }}>
@@ -975,9 +996,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             </Text>
           </TouchableOpacity>
         </View>
+        )}
 
         {/* Confirmed Payment Card */}
-        {confirmedPayment.amount > 0 && (
+        {!isB2D && !isWastage && confirmedPayment.amount > 0 && (
           <View style={styles.paymentConfirmedCard}>
             <View style={styles.paymentConfirmedLeft}>
               <View style={styles.paymentConfirmedIcon}>
@@ -1004,6 +1026,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         )}
 
         {/* Live Payment Summary & Balances */}
+        {!isB2D && !isWastage && (
         <View style={[styles.summaryCard, {backgroundColor: '#FAFAFA', borderColor: '#E5D8C0', zIndex: -4}]}>
           <Text style={styles.cardTitle}>Payment Summary</Text>
           <View style={styles.sumRow}>
@@ -1037,6 +1060,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             <Text style={[styles.sumVal, {color: '#2E7D32'}]}>{advanceBalanceAfter.toFixed(3)} g</Text>
           </View>
         </View>
+        )}
 
         {/* Transaction Summary */}
         <View style={[styles.summaryCard, {zIndex: -5}]}>

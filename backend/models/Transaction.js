@@ -49,7 +49,7 @@ const TransactionSchema = new mongoose.Schema(
   {
     transactionType: {
       type: String,
-      enum: ['B2B', 'B2C', 'LINE_STOCK_SETTLEMENT'],
+      enum: ['B2C', 'B2D', 'LINE_STOCK_SETTLEMENT'],
       required: true,
     },
     transactionSubtype: {

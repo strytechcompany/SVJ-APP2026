@@ -224,7 +224,7 @@ const generateHTML = async (transaction, isThermal = true, customTamilMsg) => {
       <body>
         <div class="receipt-container">
         <div class="divider"></div>
-        <div class="center bold">${escapeHtml((transactionType || 'B2B') + ' BILL')}</div>
+        <div class="center bold">${escapeHtml((transactionType || 'B2C') + ' BILL')}</div>
         <div class="divider"></div>
 
         ${transaction.commonBillNo ? row('Bill No:', escapeHtml(transaction.commonBillNo)) : ''}
@@ -325,7 +325,7 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
     'No 370, Big Bazaar Street\n(Opp. B.G. Naidu Sweets)'
   );
   const phoneLine = [shopProfile?.phone1, shopProfile?.phone2].filter(Boolean).join(' / ');
-  const billTitle = `${transactionType || 'B2B'} BILL`;
+  const billTitle = `${transactionType || 'B2C'} BILL`;
   const dateStr = new Date(createdAt).toLocaleDateString('en-GB');
   const timeStr = new Date(createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   const cgst = gstDetails?.cgstAmount || 0;

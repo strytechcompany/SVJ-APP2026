@@ -33,7 +33,6 @@ const SettingSchema = new mongoose.Schema({
     hsnCode: { type: String, default: '7113' },
     prefixes: {
       b2c: { type: String, default: 'SVJ-B2C-' },
-      b2b: { type: String, default: 'SVJ-B2B-' },
       lineStock: { type: String, default: 'SVJ-LS-' },
       chit: { type: String, default: 'SVJ-CHIT-' }
     }

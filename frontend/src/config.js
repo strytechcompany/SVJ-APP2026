@@ -3,7 +3,7 @@
 // Run `node server.js` from the backend/ folder, then use this URL.
 // const API_BASE_URL = 'https://sri-imeg.onrender.com/api';
 
-const API_BASE_URL = 'http://192.168.29.73:5000/api';
+const API_BASE_URL = 'http://192.168.1.6:5000/api';
 
 // ── RENDER (cloud — works from any network / APK build) ──────────────────────
 // Render service is currently suspended. Fix at render.com, then switch back:
