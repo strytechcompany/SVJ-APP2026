@@ -2,7 +2,7 @@ import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, FlatList, StyleSheet, TouchableOpacity, RefreshControl,
-  Platform, StatusBar, Alert, ActivityIndicator
+  Platform, StatusBar, Alert, ActivityIndicator, Animated
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -22,6 +22,7 @@ const BG = '#F8F4E8';
 export default function StockManagementScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const debounceRef = useRef(null);
+  const spinAnim = useRef(new Animated.Value(0)).current;
 
   const [activeTab, setActiveTab] = useState('Showroom'); // 'Showroom' | 'Received'
 
@@ -44,6 +45,28 @@ export default function StockManagementScreen({ navigation }) {
       fetchReceivedSummary();
     }, [])
   );
+
+  // Spin animation while loading
+  useEffect(() => {
+    if (loading) {
+      Animated.loop(
+        Animated.timing(spinAnim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        })
+      ).start();
+    } else {
+      spinAnim.stopAnimation();
+      spinAnim.setValue(0);
+    }
+  }, [loading]);
+
+  const spin = spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  const handleRefresh = useCallback(() => {
+    onRefresh();
+  }, [onRefresh]);
 
   // --- Showroom Handlers ---
   const handleSearch = useCallback((text) => {
@@ -131,6 +154,21 @@ export default function StockManagementScreen({ navigation }) {
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + (Platform.OS === 'android' ? 10 : 0) }]}>
         <Text style={styles.headerTitle}>Inventory Dashboard</Text>
+        <TouchableOpacity
+          style={styles.refreshBtn}
+          onPress={handleRefresh}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          disabled={loading || refreshing}
+        >
+          <Animated.View style={{ transform: [{ rotate: spin }] }}>
+            <MaterialCommunityIcons
+              name="refresh"
+              size={22}
+              color={(loading || refreshing) ? 'rgba(212,175,55,0.4)' : GOLD}
+            />
+          </Animated.View>
+        </TouchableOpacity>
       </View>
 
       {/* Tabs */}
@@ -186,7 +224,16 @@ export default function StockManagementScreen({ navigation }) {
             onEndReached={loadMoreStocks}
             onEndReachedThreshold={0.5}
             ListFooterComponent={loading && pagination.page < pagination.pages ? <ActivityIndicator size="small" color={GOLD} /> : null}
-            ListEmptyComponent={!loading && <Text style={styles.emptyText}>No Showroom Stock Found.</Text>}
+            ListEmptyComponent={
+              loading
+                ? (
+                  <View style={styles.loadingState}>
+                    <ActivityIndicator size="large" color={GOLD} style={{ marginBottom: 14 }} />
+                    <Text style={styles.loadingText}>LOADING STOCK ITEMS...</Text>
+                  </View>
+                )
+                : <Text style={styles.emptyText}>No Showroom Stock Found.</Text>
+            }
           />
         ) : (
           <FlatList
@@ -232,12 +279,23 @@ const styles = StyleSheet.create({
     backgroundColor: HEADER_BG,
     paddingHorizontal: 20,
     paddingBottom: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   headerTitle: {
     color: GOLD,
     fontSize: 24,
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+  refreshBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(212,175,55,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tabContainer: {
     flexDirection: 'row',
@@ -261,7 +319,16 @@ const styles = StyleSheet.create({
   listContent: { paddingBottom: 100 },
   summaryContainer: { padding: 16 },
   filterWrapper: { paddingHorizontal: 16, marginBottom: 16 },
-  emptyText: { textAlign: 'center', color: '#666', marginTop: 40, fontSize: 16 },
+  emptyText: { textAlign: 'center', color: '#999', marginTop: 60, fontSize: 15 },
+  loadingState: { alignItems: 'center', marginTop: 60, paddingHorizontal: 20 },
+  loadingText: {
+    color: GOLD,
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textAlign: 'center',
+    opacity: 0.85,
+  },
   
   // Received Summary Styles
   receivedSumRow: { flexDirection: 'row', padding: 16, gap: 10 },
