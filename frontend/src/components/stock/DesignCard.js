@@ -33,7 +33,7 @@ const parseNumericValue = (value) => {
 const getQuantity = (item) => toNumber(
   parseNumericValue(
     item && typeof item === 'object'
-      ? (item.quantity ?? item.qty ?? item.pcs ?? item.totalQty)
+      ? (item.quantity ?? item.qty ?? item.pcs ?? item.totalQty ?? item.count)
       : item
   )
 );
@@ -134,7 +134,7 @@ export default function DesignCard({ group, onDelete, onEdit, onItemPress }) {
 
   const recordsTotalQty = group.records.reduce((sum, r) => {
     const qty = getQuantity(r);
-    if (!Number.isFinite(parseNumericValue(r.quantity ?? r.qty ?? r.pcs ?? r.totalQty))) {
+    if (!Number.isFinite(parseNumericValue(r.quantity ?? r.qty ?? r.pcs ?? r.totalQty ?? r.count))) {
       console.warn('[DesignCard] Invalid quantity detected:', {
         designName: group.designName,
         itemId: r._id,

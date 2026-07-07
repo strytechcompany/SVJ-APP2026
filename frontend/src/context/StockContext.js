@@ -23,7 +23,7 @@ const parseNumericValue = (value) => {
 const getQuantity = (item) => toNumber(
   parseNumericValue(
     item && typeof item === 'object'
-      ? (item.quantity ?? item.qty ?? item.pcs ?? item.totalQty)
+      ? (item.quantity ?? item.qty ?? item.pcs ?? item.totalQty ?? item.count)
       : item
   )
 );
@@ -86,14 +86,17 @@ export const StockProvider = ({ children }) => {
   // ─── Fetch Showroom Stocks ────────────────────────────────────────────────────────
   const fetchStocks = useCallback(async (params = {}, reset = true) => {
     try {
-      if (reset) setLoading(true);
+      if (reset) {
+        setLoading(true);
+        setStocks([]); // ← clear stale data immediately so no wrong values flash
+      }
       setError(null);
 
       const queryParams = {
         search: params.search ?? searchQuery,
         category: params.category ?? selectedCategory,
         page: reset ? 1 : pagination.page + 1,
-        limit: 50,
+        limit: 500, // fetch all in one shot (238 items fits easily)
       };
 
       console.log('[StockContext] fetchStocks request:', queryParams);

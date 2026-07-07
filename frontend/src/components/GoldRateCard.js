@@ -115,16 +115,17 @@ export default function GoldRateCard() {
       <Modal
         visible={modalVisible}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setModalVisible(false)}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <View style={styles.overlay}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              style={styles.keyboardView}
-            >
-              <View style={styles.modalCard}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.overlay}>
+              <TouchableWithoutFeedback onPress={() => {}}>
+                <View style={styles.modalCard}>
                 {/* Modal Header */}
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>Edit Gold Rate</Text>
@@ -178,9 +179,10 @@ export default function GoldRateCard() {
                   </TouchableOpacity>
                 </View>
               </View>
-            </KeyboardAvoidingView>
-          </View>
-        </TouchableWithoutFeedback>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );
@@ -241,22 +243,24 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
   },
   keyboardView: {
     width: '100%',
   },
   modalCard: {
     backgroundColor: WHITE,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 24,
     padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+    paddingBottom: 24,
+    width: '100%',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 16,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 20,
   },
   modalHeader: {
     flexDirection: 'row',

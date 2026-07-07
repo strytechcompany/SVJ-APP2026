@@ -77,39 +77,28 @@ exports.createStock = async (req, res) => {
   }
 };
 
-// ─── Get All Stock (paginated, search, filter) ───────────────────────────────
+// ─── Get All Stock (grouped by designName, single aggregation) ───────────────
 exports.getAllStock = async (req, res) => {
   try {
     const {
       search = '',
       category = 'All',
       page = 1,
-      limit = 50,
-      scan = '',      // scan=true bypasses isActive/isAvailable filters for scanner lookups
+      limit = 500,  // fetch all in one shot for the inventory screen (238 items)
+      scan = '',    // scan=true bypasses isActive/isAvailable filters for scanner lookups
     } = req.query;
 
-    console.log('[getAllStock] query params:', {
-      search,
-      category,
-      page,
-      limit,
-      scan,
-    });
+    // Build $match stage
+    // Use $ne: false so legacy docs without these fields (treated as true) are still included.
+    const matchStage = scan === 'true'
+      ? {}
+      : { isActive: { $ne: false }, isAvailable: { $ne: false } };
 
-    // When called from a scanner, skip the isActive/isAvailable filters so all items are searchable.
-    // Otherwise, items fully issued out (e.g. to a Line Stocker, isAvailable=false) are hidden
-    // from the stock view until they're settled back in (unsold returns flip isAvailable to true).
-    const query = scan === 'true' ? {} : { isActive: true, isAvailable: { $ne: false } };
+    if (category && category !== 'All') matchStage.category = category;
 
-    // Category filter
-    if (category && category !== 'All') {
-      query.category = category;
-    }
-
-    // Search filter
     if (search.trim()) {
       const regex = new RegExp(search.trim(), 'i');
-      query.$or = [
+      matchStage.$or = [
         { designName: regex },
         { itemNumber: regex },
         { category: regex },
@@ -118,70 +107,79 @@ exports.getAllStock = async (req, res) => {
       ];
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const total = await Stock.countDocuments(query);
+    const pageNum  = Math.max(1, parseInt(page));
+    const limitNum = Math.max(1, parseInt(limit));
+    const skip     = (pageNum - 1) * limitNum;
 
-    console.log('[getAllStock] mongo query:', JSON.stringify(query), 'skip=', skip, 'total=', total);
+    // Single aggregation: filter → group → sort → facet (data + count)
+    const [result] = await Stock.aggregate([
+      { $match: matchStage },
 
-    const stocks = await Stock.find(query)
-      .sort({ designName: 1, createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+      // Normalise qty / weight field names coming from legacy imported docs
+      {
+        $addFields: {
+          _qty: {
+            $ifNull: ['$quantity', { $ifNull: ['$qty', { $ifNull: ['$pcs', { $ifNull: ['$totalQty', { $ifNull: ['$count', 0] }] }] }] }]
+          },
+          _weight: {
+            $ifNull: ['$grossWeight', { $ifNull: ['$netWeight', { $ifNull: ['$totalWeight', { $ifNull: ['$weight', 0] }] }] }]
+          },
+        },
+      },
 
-    // Group by designName
-    const grouped = {};
-    stocks.forEach((item) => {
-      const designName = String(item.designName || '').trim();
-      const key = designName ? designName.toUpperCase() : String(item._id);
-      if (!grouped[key]) {
-        grouped[key] = {
-          designName: designName || 'Untitled',
-          groupKey: key,
-          records: [],
-          totalQty: 0,
-          totalNetWeight: 0,
-          totalStockWeight: 0,
-          totalWeight: 0,
-        };
-      }
-      grouped[key].records.push(item);
-      const quantity = parseNumericValue(item.quantity ?? item.qty ?? item.pcs ?? item.totalQty);
-      const weight = parseNumericValue(
-        item.grossWeight ??
-        item.netWeight ??
-        item.totalWeight ??
-        item.weight
-      );
-      grouped[key].totalQty += quantity;
-      grouped[key].totalNetWeight += weight;
-      grouped[key].totalStockWeight += weight;
-      grouped[key].totalWeight += weight;
-    });
+      // Group items by UPPERCASE designName
+      {
+        $group: {
+          _id: { $toUpper: { $trim: { input: { $ifNull: ['$designName', ''] } } } },
+          designName:       { $first: { $trim: { input: { $ifNull: ['$designName', 'Untitled'] } } } },
+          records:          { $push: '$$ROOT' },
+          totalQty:         { $sum: { $toDouble: '$_qty' } },
+          totalNetWeight:   { $sum: { $toDouble: '$_weight' } },
+          totalStockWeight: { $sum: { $toDouble: '$_weight' } },
+          totalWeight:      { $sum: { $toDouble: '$_weight' } },
+        },
+      },
 
-    const groupedArray = Object.values(grouped).map((g) => ({
-      ...g,
-      totalQty: parseFloat(g.totalQty.toFixed(3)),
-      totalNetWeight: parseFloat(g.totalNetWeight.toFixed(3)),
-      totalStockWeight: parseFloat(g.totalStockWeight.toFixed(3)),
-      totalWeight: parseFloat(g.totalWeight.toFixed(3)),
-    }));
+      // Sort groups alphabetically
+      { $sort: { designName: 1 } },
 
-    console.log('[getAllStock] fetched docs:', stocks.length, 'grouped results:', groupedArray.length);
-    console.log('[getAllStock] grouped totals:', groupedArray.reduce((acc, group) => ({
-      totalDesigns: acc.totalDesigns + 1,
-      totalQuantity: acc.totalQuantity + parseNumericValue(group.totalQty),
-      totalStockWeight: acc.totalStockWeight + parseNumericValue(group.totalStockWeight),
-    }), { totalDesigns: 0, totalQuantity: 0, totalStockWeight: 0 }));
+      // Use $facet to get both the paginated data and the total group count in one query
+      {
+        $facet: {
+          data: [
+            { $skip: skip },
+            { $limit: limitNum },
+            {
+              $project: {
+                _id: 0,
+                groupKey:        '$_id',
+                designName:      1,
+                records:         1,
+                totalQty:        { $round: ['$totalQty', 3] },
+                totalNetWeight:  { $round: ['$totalNetWeight', 3] },
+                totalStockWeight:{ $round: ['$totalStockWeight', 3] },
+                totalWeight:     { $round: ['$totalWeight', 3] },
+              },
+            },
+          ],
+          totalGroups: [{ $count: 'n' }],
+        },
+      },
+    ]);
+
+    const groupedArray = result?.data ?? [];
+    const totalGroups  = result?.totalGroups?.[0]?.n ?? 0;
+
+    console.log('[getAllStock] groups returned:', groupedArray.length, '| total groups:', totalGroups);
 
     res.json({
       success: true,
       data: groupedArray,
       pagination: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
+        total: totalGroups,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(totalGroups / limitNum),
       },
     });
   } catch (error) {
@@ -191,38 +189,47 @@ exports.getAllStock = async (req, res) => {
   }
 };
 
-// ─── Get Stock Summary ────────────────────────────────────────────────────────
+// ─── Get Stock Summary (pure DB aggregation, no doc transfer) ────────────────
 exports.getStockSummary = async (req, res) => {
   try {
-    const toNumber = parseNumericValue;
+    const [result] = await Stock.aggregate([
+      // Same filter as getAllStock — exclude issued-out items
+      { $match: { isActive: { $ne: false }, isAvailable: { $ne: false } } },
 
-    const getQuantity = (doc) => toNumber(
-      doc?.quantity ?? doc?.qty ?? doc?.pcs ?? doc?.totalQty
-    );
+      // Normalise legacy field names in the DB
+      {
+        $addFields: {
+          _qty: {
+            $ifNull: ['$quantity', { $ifNull: ['$qty', { $ifNull: ['$pcs', { $ifNull: ['$totalQty', { $ifNull: ['$count', 0] }] }] }] }]
+          },
+          _weight: {
+            $ifNull: ['$grossWeight', { $ifNull: ['$netWeight', { $ifNull: ['$totalWeight', { $ifNull: ['$weight', 0] }] }] }]
+          },
+        },
+      },
 
-    const getWeight = (doc) => toNumber(
-      doc?.grossWeight ??
-      doc?.netWeight ??
-      doc?.totalWeight ??
-      doc?.weight ??
-      0
-    );
+      {
+        $group: {
+          _id: null,
+          totalDesigns:     { $addToSet: { $toUpper: { $trim: { input: { $ifNull: ['$designName', ''] } } } } },
+          totalQuantity:    { $sum: { $toDouble: '$_qty' } },
+          totalStockWeight: { $sum: { $toDouble: '$_weight' } },
+        },
+      },
 
-    // Exclude stock fully issued out (e.g. to a Line Stocker) — matches getAllStock's view.
-    const stocks = await Stock.find({ isAvailable: { $ne: false } }).lean();
-    console.log('[getStockSummary] total records fetched from MongoDB:', stocks.length);
+      {
+        $project: {
+          _id: 0,
+          totalDesigns:     { $size: '$totalDesigns' },
+          totalQuantity:    { $round: ['$totalQuantity', 3] },
+          totalStockWeight: { $round: ['$totalStockWeight', 3] },
+          totalNetWeight:   { $round: ['$totalStockWeight', 3] },
+        },
+      },
+    ]);
 
-    const summary = stocks.reduce((acc, doc) => {
-      acc.totalDesigns += 1;
-      acc.totalQuantity += getQuantity(doc);
-      acc.totalStockWeight += getWeight(doc);
-      return acc;
-    }, { totalDesigns: 0, totalQuantity: 0, totalStockWeight: 0 });
-
-    summary.totalNetWeight = parseFloat(summary.totalStockWeight.toFixed(3));
-    summary.totalStockWeight = parseFloat(summary.totalStockWeight.toFixed(3));
-
-    console.log('[getStockSummary] totals:', summary);
+    const summary = result ?? { totalDesigns: 0, totalQuantity: 0, totalStockWeight: 0, totalNetWeight: 0 };
+    console.log('[getStockSummary] aggregated totals:', summary);
 
     res.json({ success: true, data: summary });
   } catch (error) {
