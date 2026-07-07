@@ -23,6 +23,7 @@ exports.createTransaction = async (req, res) => {
       receiptTotalAmount,
       finalAmount,
       balanceAmount,
+      isWastage,
       goldRate,
       description,
       paymentMode,
@@ -57,6 +58,7 @@ exports.createTransaction = async (req, res) => {
       receiptTotalAmount,
       finalAmount,
       balanceAmount,
+      isWastage,
       goldRate,
       description,
       paymentMode,
@@ -125,6 +127,7 @@ exports.createTransaction = async (req, res) => {
         takenTouch: item.takenTouch,
         purity: item.purity,
         amount: item.amount,
+        sriCost: item.sriCost,
         status: 'AVAILABLE'
       }));
       await ReceivedInventory.insertMany(receivedDocs);

@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
-  Alert, StatusBar, Platform, Switch, FlatList, Modal
+  Alert, StatusBar, Platform, Switch, FlatList
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import { customerAPI, stockAPI, transactionAPI, settingsAPI } from '../../services/api';
 import { useDashboard } from '../../context/DashboardContext';
 import { useTransaction } from '../../context/TransactionContext';
@@ -29,14 +28,15 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [customer, setCustomer] = useState(null);
   const [globalGoldRate, setGlobalGoldRate] = useState('');
 
-  // Stock Search Dropdown & Scanner
+  // Wastage-category B2C customers get a stripped-down, gram-only calculation flow
+  const isWastage = type === 'B2C' && customer?.customerCategory === 'WASTAGE';
+  // B2D also uses a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance added to Old Balance
+  const isGramOnly = isWastage || isB2D;
+
+  // Stock Search Dropdown
   const [stockQuery, setStockQuery] = useState('');
   const [stockResults, setStockResults] = useState([]);
   const [showStockDropdown, setShowStockDropdown] = useState(false);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scannerTorch, setScannerTorch] = useState(false);
-  const [pendingScanValue, setPendingScanValue] = useState(null);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const normalizeScanValue = (value) => {
     const raw = String(value || '').trim();
@@ -76,6 +76,27 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [issueSRIBill, setIssueSRIBill] = useState('');
   const [issueAmountOverride, setIssueAmountOverride] = useState(''); // Allows manual amount
 
+  // Wastage Issue Section (gram-only flow)
+  const [wIssueStockId, setWIssueStockId] = useState('');
+  const [wIssueItemNo, setWIssueItemNo] = useState('');
+  const [wIssueItemName, setWIssueItemName] = useState('');
+  const [wIssueWeight, setWIssueWeight] = useState('');
+  const [wIssueWastage, setWIssueWastage] = useState('');
+  const [wIssueActualTouch, setWIssueActualTouch] = useState('');
+  const [wIssueTakenTouch, setWIssueTakenTouch] = useState('');
+
+  // B2D Issue Section (gram-only flow)
+  const [bdIssueStockId, setBdIssueStockId] = useState('');
+  const [bdIssueItemNo, setBdIssueItemNo] = useState('');
+  const [bdIssueItemName, setBdIssueItemName] = useState('');
+  const [bdIssueWeight, setBdIssueWeight] = useState('');
+  const [bdIssueActualTouch, setBdIssueActualTouch] = useState('');
+
+  // B2D Receipt Section (gram-only flow)
+  const [bdReceiptItemName, setBdReceiptItemName] = useState('');
+  const [bdReceiptWeight, setBdReceiptWeight] = useState('');
+  const [bdReceiptSriCost, setBdReceiptSriCost] = useState('');
+
   // Receipt Section
   const [receiptType, setReceiptType] = useState('');
   const [receiptWeight, setReceiptWeight] = useState('');
@@ -100,6 +121,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       plus: i.plus || 0,
       purity: i.purity || 0,
       amount: i.amount || 0,
+      wastage: i.wastage || 0,
+      value1: i.value1 || 0,
+      actualTouch: i.actualTouch || 0,
+      takenTouch: i.takenTouch || 0,
+      value2: i.value2 || 0,
+      profit: i.profit || 0,
     }));
   });
   const [receiptItems, setReceiptItems] = useState(() => {
@@ -114,6 +141,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       goldRate: i.goldRate || 0,
       purity: i.purity || 0,
       amount: i.amount || 0,
+      sriCost: i.sriCost || 0,
     }));
   });
 
@@ -247,6 +275,28 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
   // Shared fill helper — called by both scan and manual submit
   const fillStock = (s) => {
+    if (isWastage) {
+      setWIssueStockId(s._id);
+      setWIssueItemNo(s.itemNumber);
+      setWIssueItemName(s.itemName || s.designName || '');
+      setWIssueWeight(s.netWeight != null ? String(s.netWeight) : '0');
+      setStockQuery(s.itemNumber);
+      setShowStockDropdown(false);
+      setWIssueWastage('');
+      setWIssueActualTouch('');
+      setWIssueTakenTouch('');
+      return;
+    }
+    if (isB2D) {
+      setBdIssueStockId(s._id);
+      setBdIssueItemNo(s.itemNumber);
+      setBdIssueItemName(s.itemName || s.designName || '');
+      setBdIssueWeight(s.netWeight != null ? String(s.netWeight) : '0');
+      setStockQuery(s.itemNumber);
+      setShowStockDropdown(false);
+      setBdIssueActualTouch('');
+      return;
+    }
     setIssueStockId(s._id);
     setIssueItemNo(s.itemNumber);
     setIssueItemName(s.itemName || s.designName || '');
@@ -305,26 +355,6 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
     return false;
   };
-
-  // Auto-fill when a QR/barcode is scanned
-  useEffect(() => {
-    if (!pendingScanValue) return;
-    const query = normalizeScanValue(pendingScanValue);
-    setPendingScanValue(null);
-    if (!query) return;
-
-    // Show scanned value in the search input so user can see what was read
-    setStockQuery(query);
-
-    lookupStock(query).then(found => {
-      if (!found) {
-        Alert.alert(
-          'Not Found',
-          `Scanned: "${query}"\n\nNo stock item matched this code. Check if the item exists in stock list.`
-        );
-      }
-    });
-  }, [pendingScanValue]);
 
   const selectStockItem = (s) => fillStock(s);
 
@@ -394,6 +424,143 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
   const removeIssueItem = (id) => setIssueItems(issueItems.filter(i => i.id !== id));
 
+  // --- Calculations for Wastage Issue ---
+  // weight + wastage = value1
+  const wIssueValue1 = useMemo(() => {
+    const w = parseFloat(wIssueWeight) || 0;
+    const wa = parseFloat(wIssueWastage) || 0;
+    return w + wa;
+  }, [wIssueWeight, wIssueWastage]);
+
+  // value1 * actualTouch = Purity
+  const wIssuePurity = useMemo(() => {
+    const t = parseFloat(wIssueActualTouch) || 0;
+    return wIssueValue1 * (t / 100);
+  }, [wIssueValue1, wIssueActualTouch]);
+
+  // weight * takenTouch = value2
+  const wIssueValue2 = useMemo(() => {
+    const w = parseFloat(wIssueWeight) || 0;
+    const t = parseFloat(wIssueTakenTouch) || 0;
+    return w * (t / 100);
+  }, [wIssueWeight, wIssueTakenTouch]);
+
+  // Profit = Purity - value2
+  const wIssueProfit = useMemo(() => wIssuePurity - wIssueValue2, [wIssuePurity, wIssueValue2]);
+
+  const handleAddWastageIssue = () => {
+    if (!wIssueWeight || !wIssueActualTouch) {
+      Alert.alert('Error', 'Weight and Actual Touch are required.');
+      return;
+    }
+    const newItem = {
+      id: Date.now().toString(),
+      stockId: wIssueStockId || null,
+      itemNumber: wIssueItemNo || 'N/A',
+      itemName: wIssueItemName || 'Manual Entry',
+      weight: parseFloat(wIssueWeight) || 0,
+      count: 1,
+      wastage: parseFloat(wIssueWastage) || 0,
+      value1: wIssueValue1,
+      actualTouch: parseFloat(wIssueActualTouch) || 0,
+      purity: wIssuePurity,
+      takenTouch: parseFloat(wIssueTakenTouch) || 0,
+      value2: wIssueValue2,
+      profit: wIssueProfit,
+      sriCost: 0,
+      sriBill: 0,
+      plus: 0,
+      amount: 0,
+    };
+    setIssueItems([...issueItems, newItem]);
+
+    // Clear Form
+    setStockQuery('');
+    setWIssueStockId('');
+    setWIssueItemNo('');
+    setWIssueItemName('');
+    setWIssueWeight('');
+    setWIssueWastage('');
+    setWIssueActualTouch('');
+    setWIssueTakenTouch('');
+  };
+
+  // --- Calculations for B2D Issue ---
+  // weight * actualTouch = Purity
+  const bdIssuePurity = useMemo(() => {
+    const w = parseFloat(bdIssueWeight) || 0;
+    const t = parseFloat(bdIssueActualTouch) || 0;
+    return w * (t / 100);
+  }, [bdIssueWeight, bdIssueActualTouch]);
+
+  const handleAddB2DIssue = () => {
+    if (!bdIssueWeight || !bdIssueActualTouch) {
+      Alert.alert('Error', 'Weight and Actual Touch are required.');
+      return;
+    }
+    const newItem = {
+      id: Date.now().toString(),
+      stockId: bdIssueStockId || null,
+      itemNumber: bdIssueItemNo || 'N/A',
+      itemName: bdIssueItemName || 'Manual Entry',
+      weight: parseFloat(bdIssueWeight) || 0,
+      count: 1,
+      actualTouch: parseFloat(bdIssueActualTouch) || 0,
+      purity: bdIssuePurity,
+      sriCost: 0,
+      sriBill: 0,
+      plus: 0,
+      amount: 0,
+      wastage: 0,
+      value1: 0,
+      takenTouch: 0,
+      value2: 0,
+      profit: 0,
+    };
+    setIssueItems([...issueItems, newItem]);
+
+    // Clear Form
+    setStockQuery('');
+    setBdIssueStockId('');
+    setBdIssueItemNo('');
+    setBdIssueItemName('');
+    setBdIssueWeight('');
+    setBdIssueActualTouch('');
+  };
+
+  // --- Calculations for B2D Receipt ---
+  // weight * sriCost = Purity
+  const bdReceiptPurity = useMemo(() => {
+    const w = parseFloat(bdReceiptWeight) || 0;
+    const s = parseFloat(bdReceiptSriCost) || 0;
+    return w * (s / 100);
+  }, [bdReceiptWeight, bdReceiptSriCost]);
+
+  const handleAddB2DReceipt = () => {
+    if (!bdReceiptWeight || !bdReceiptSriCost) {
+      Alert.alert('Error', 'Weight and SRI Cost are required.');
+      return;
+    }
+    const newItem = {
+      id: Date.now().toString(),
+      receiptType: bdReceiptItemName || 'Manual Entry',
+      weight: parseFloat(bdReceiptWeight) || 0,
+      sriCost: parseFloat(bdReceiptSriCost) || 0,
+      purity: bdReceiptPurity,
+      less: 0,
+      actualTouch: 0,
+      takenTouch: 0,
+      goldRate: 0,
+      amount: 0,
+    };
+    setReceiptItems([...receiptItems, newItem]);
+
+    // Clear Form
+    setBdReceiptItemName('');
+    setBdReceiptWeight('');
+    setBdReceiptSriCost('');
+  };
+
   // --- Calculations for Receipt ---
   const currentReceiptPurity = useMemo(() => {
     const w = parseFloat(receiptWeight) || 0;
@@ -449,6 +616,9 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // finalAmount mathematically serves as the true "Subtotal Amount"
   const finalAmount = issueTotalAmount + cgstVal + sgstVal - receiptTotalAmount;
 
+  // --- Gram-only ledger (Wastage & B2D): Issue Gram (Purity) - Receipt Gram (Purity) ---
+  const gramOutstanding = issueTotalPurity - receiptTotalPurity;
+
   // --- Advanced Payment & Balance Logic ---
   const activeGoldRate = parseFloat(globalGoldRate) || 0;
   const goldConvertedAmt = (paymentMode === 'Gold') ? ((parseFloat(goldPayWeight) || 0) * activeGoldRate) : 0;
@@ -474,7 +644,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // Outstanding = Subtotal - Collected
   const transactionOutstanding = finalAmount - collectedAmount;
 
-  if (activeGoldRate > 0) {
+  if (isGramOnly) {
+    // Gram-only ledger: outstanding balance is added directly to old balance
+    oldBalanceAfter = oldBalanceBefore + gramOutstanding;
+  } else if (activeGoldRate > 0) {
     if (transactionOutstanding > 0) {
       // Underpaid: Add outstanding grams to old balance
       const outstandingGram = transactionOutstanding / activeGoldRate;
@@ -548,9 +721,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       receiptTotalPurity,
       receiptTotalAmount,
       finalAmount,
-      balanceAmount: transactionOutstanding,
+      balanceAmount: isGramOnly ? gramOutstanding : transactionOutstanding,
+      isWastage,
       goldRate: activeGoldRate,
-      
+
       description,
       paymentMode,
       goldPaymentWeight: parseFloat(goldPayWeight) || 0,
@@ -562,9 +736,13 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       advanceBalanceAfter,
       convertedGram: collectedGrams,
       collectedAmount: collectedAmount,
-      outstandingAmount: Math.max(0, transactionOutstanding),
-      outstandingGram: activeGoldRate ? (Math.max(0, transactionOutstanding) / activeGoldRate) : 0,
-      status: Math.max(0, transactionOutstanding) > 0 ? 'PARTIAL' : 'PAID',
+      outstandingAmount: isGramOnly ? 0 : Math.max(0, transactionOutstanding),
+      outstandingGram: isGramOnly
+        ? Math.max(0, gramOutstanding)
+        : (activeGoldRate ? (Math.max(0, transactionOutstanding) / activeGoldRate) : 0),
+      status: isGramOnly
+        ? (gramOutstanding > 0 ? 'PARTIAL' : 'PAID')
+        : (Math.max(0, transactionOutstanding) > 0 ? 'PARTIAL' : 'PAID'),
       createdAt: new Date().toISOString(),
       editTransactionId: editTransactionId || undefined,
     };
@@ -574,9 +752,6 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   };
 
   if (!customer) return <View style={styles.container} />;
-
-  // Wastage-category B2C customers get a stripped-down calculation flow
-  const isWastage = type === 'B2C' && customer.customerCategory === 'WASTAGE';
 
   return (
     <View style={styles.container}>
@@ -658,12 +833,185 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Issue Entry */}
+        {/* Issue Entry — Wastage (gram-only) */}
         {isWastage && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
+
+          <View style={{zIndex: 100}}>
+            <Text style={styles.inputLabel}>Search by Item Number</Text>
+            <View style={styles.barcodeRow}>
+              <TextInput
+                style={styles.barcodeInput}
+                placeholder="Enter Item Number..."
+                placeholderTextColor="#999"
+                value={stockQuery}
+                onChangeText={(t) => { setStockQuery(t); setShowStockDropdown(true); }}
+                onFocus={() => setShowStockDropdown(true)}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="search"
+                onSubmitEditing={() => handleStockLookup(stockQuery)}
+              />
+            </View>
+
+            {showStockDropdown && stockResults.length > 0 && (
+              <View style={styles.dropdown}>
+                {stockResults.map(s => (
+                  <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectStockItem(s)}>
+                    <Text style={[styles.dropItemText, { fontWeight: '800', fontSize: 13 }]}>{s.itemNumber}</Text>
+                    <Text style={{ fontSize: 11, color: '#555', marginTop: 2 }}>
+                      {s.itemName || s.designName}  ·  Wt: {s.netWeight}g
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Item Number</Text>
+              <TextInput style={styles.input} value={wIssueItemNo} onChangeText={setWIssueItemNo} />
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Item Name</Text>
+              <TextInput style={styles.input} value={wIssueItemName} onChangeText={setWIssueItemName} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Weight (g)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wIssueWeight} onChangeText={setWIssueWeight} />
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Wastage (g)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wIssueWastage} onChangeText={setWIssueWastage} placeholder="Manual Entry" />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Value (Wt + Wastage)</Text>
+              <Text style={styles.calcValue}>{wIssueValue1.toFixed(3)} g</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Actual Touch (%)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wIssueActualTouch} onChangeText={setWIssueActualTouch} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Purity (Value × Actual Touch)</Text>
+              <Text style={[styles.calcValue, { color: GOLD }]}>{wIssuePurity.toFixed(3)} g</Text>
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <View style={{ borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 12 }} />
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Weight (g)</Text>
+              <Text style={styles.calcValue}>{(parseFloat(wIssueWeight) || 0).toFixed(3)} g</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Taken Touch (%)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wIssueTakenTouch} onChangeText={setWIssueTakenTouch} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Value (Wt × Taken Touch)</Text>
+              <Text style={styles.calcValue}>{wIssueValue2.toFixed(3)} g</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Profit (Purity − Value)</Text>
+              <Text style={[styles.calcValue, { color: '#2E7D32' }]}>{wIssueProfit.toFixed(3)} g</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity style={styles.actionBtn} onPress={handleAddWastageIssue}>
+            <Text style={styles.actionBtnText}>Issue Item</Text>
+          </TouchableOpacity>
         </View>
         )}
+
+        {/* Issue Entry — B2D (gram-only) */}
+        {isB2D && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Issue Product</Text>
+
+          <View style={{zIndex: 100}}>
+            <Text style={styles.inputLabel}>Search by Item Number</Text>
+            <View style={styles.barcodeRow}>
+              <TextInput
+                style={styles.barcodeInput}
+                placeholder="Enter Item Number..."
+                placeholderTextColor="#999"
+                value={stockQuery}
+                onChangeText={(t) => { setStockQuery(t); setShowStockDropdown(true); }}
+                onFocus={() => setShowStockDropdown(true)}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="search"
+                onSubmitEditing={() => handleStockLookup(stockQuery)}
+              />
+            </View>
+
+            {showStockDropdown && stockResults.length > 0 && (
+              <View style={styles.dropdown}>
+                {stockResults.map(s => (
+                  <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectStockItem(s)}>
+                    <Text style={[styles.dropItemText, { fontWeight: '800', fontSize: 13 }]}>{s.itemNumber}</Text>
+                    <Text style={{ fontSize: 11, color: '#555', marginTop: 2 }}>
+                      {s.itemName || s.designName}  ·  Wt: {s.netWeight}g
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Item Number</Text>
+              <TextInput style={styles.input} value={bdIssueItemNo} onChangeText={setBdIssueItemNo} />
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Item Name</Text>
+              <TextInput style={styles.input} value={bdIssueItemName} onChangeText={setBdIssueItemName} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Weight (g)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={bdIssueWeight} onChangeText={setBdIssueWeight} />
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Actual Touch (%)</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={bdIssueActualTouch} onChangeText={setBdIssueActualTouch} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Purity (Weight × Actual Touch)</Text>
+              <Text style={[styles.calcValue, { color: GOLD }]}>{bdIssuePurity.toFixed(3)} g</Text>
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <TouchableOpacity style={styles.actionBtn} onPress={handleAddB2DIssue}>
+            <Text style={styles.actionBtnText}>Issue Item</Text>
+          </TouchableOpacity>
+        </View>
+        )}
+
         {!isB2D && !isWastage && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
@@ -683,18 +1031,6 @@ export default function TransactionCalculationScreen({ navigation, route }) {
                 returnKeyType="search"
                 onSubmitEditing={() => handleStockLookup(stockQuery)}
               />
-              <TouchableOpacity style={styles.scanBtn} onPress={async () => {
-                if (!cameraPermission?.granted) {
-                  const res = await requestCameraPermission();
-                  if (!res.granted) {
-                    Alert.alert('Permission required', 'Camera permission is needed to scan barcodes.');
-                    return;
-                  }
-                }
-                setIsScanning(true);
-              }}>
-                <MaterialCommunityIcons name="barcode-scan" size={20} color="#FFF" />
-              </TouchableOpacity>
             </View>
             
             {showStockDropdown && stockResults.length > 0 && (
@@ -792,11 +1128,62 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
         ))}
 
+        {/* Issue List — Wastage: only Weight, Wastage, Actual Touch, Purity appear on the bill */}
+        {isWastage && issueItems.map(item => (
+          <View key={item.id} style={styles.listItem}>
+            <View style={styles.listTextCol}>
+              <Text style={styles.listTitle}>{item.itemName || 'Item'} ({item.weight.toFixed(3)}g)</Text>
+              <Text style={styles.listSub}>Wastage: {item.wastage.toFixed(3)}g | Actual Touch: {item.actualTouch}% | Purity: {item.purity.toFixed(3)}g</Text>
+            </View>
+            <TouchableOpacity onPress={() => removeIssueItem(item.id)}>
+              <MaterialCommunityIcons name="trash-can-outline" size={24} color="#D32F2F" />
+            </TouchableOpacity>
+          </View>
+        ))}
+
+        {/* Issue List — B2D: Item Name, Weight, Actual Touch, Purity */}
+        {isB2D && issueItems.map(item => (
+          <View key={item.id} style={styles.listItem}>
+            <View style={styles.listTextCol}>
+              <Text style={styles.listTitle}>{item.itemName || 'Item'} ({item.weight.toFixed(3)}g)</Text>
+              <Text style={styles.listSub}>Actual Touch: {item.actualTouch}% | Purity: {item.purity.toFixed(3)}g</Text>
+            </View>
+            <TouchableOpacity onPress={() => removeIssueItem(item.id)}>
+              <MaterialCommunityIcons name="trash-can-outline" size={24} color="#D32F2F" />
+            </TouchableOpacity>
+          </View>
+        ))}
+
         {/* Receipt Entry */}
         {isB2D ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Receipt</Text>
-            <Text style={styles.inputLabel}>Item Name</Text>
+
+            <View style={styles.gridRow}>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Item Name</Text>
+                <TextInput style={styles.input} value={bdReceiptItemName} onChangeText={setBdReceiptItemName} />
+              </View>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Weight (g)</Text>
+                <TextInput style={styles.input} keyboardType="numeric" value={bdReceiptWeight} onChangeText={setBdReceiptWeight} />
+              </View>
+            </View>
+
+            <View style={styles.gridRow}>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>SRI Cost (%)</Text>
+                <TextInput style={styles.input} keyboardType="numeric" value={bdReceiptSriCost} onChangeText={setBdReceiptSriCost} />
+              </View>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Purity (Weight × SRI Cost)</Text>
+                <Text style={[styles.calcValue, { color: GOLD }]}>{bdReceiptPurity.toFixed(3)} g</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity style={[styles.actionBtn, {backgroundColor: '#2E7D32'}]} onPress={handleAddB2DReceipt}>
+              <Text style={styles.actionBtnText}>+ Add Receipt Item</Text>
+            </TouchableOpacity>
           </View>
         ) : (
         <View style={[styles.card, {zIndex: -1}]}>
@@ -852,7 +1239,11 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           <View key={item.id} style={styles.listItem}>
             <View style={styles.listTextCol}>
               <Text style={styles.listTitle}>{item.receiptType || 'Receipt'} ({item.weight.toFixed(3)}g)</Text>
-              <Text style={styles.listSub}>Less: {item.less}g | T.Touch: {item.takenTouch}% | Amt: ₹{item.amount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              {isB2D ? (
+                <Text style={styles.listSub}>SRI Cost: {item.sriCost}% | Purity: {item.purity.toFixed(3)}g</Text>
+              ) : (
+                <Text style={styles.listSub}>Less: {item.less}g | T.Touch: {item.takenTouch}% | Amt: ₹{item.amount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              )}
             </View>
             <TouchableOpacity onPress={() => removeReceiptItem(item.id)}>
               <MaterialCommunityIcons name="trash-can-outline" size={24} color="#D32F2F" />
@@ -1065,43 +1456,75 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         {/* Transaction Summary */}
         <View style={[styles.summaryCard, {zIndex: -5}]}>
           <Text style={styles.cardTitle}>Final Summary</Text>
-          <View style={styles.sumRow}>
-            <Text style={styles.sumLabel}>Issue Amount:</Text>
-            <Text style={styles.sumVal}>₹ {issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-          </View>
-          {gstOn && (
-            <View style={styles.sumRow}>
-              <Text style={styles.sumLabel}>Total GST ({parseFloat(cgstPercent||0)+parseFloat(sgstPercent||0)}%):</Text>
-              <Text style={styles.sumVal}>₹ {(cgstVal + sgstVal).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-            </View>
-          )}
-          <View style={styles.sumRow}>
-            <Text style={styles.sumLabel}>Receipt Amount:</Text>
-            <Text style={styles.sumVal}>- ₹ {receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-          </View>
-          
-          <View style={{borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 10}} />
+          {isGramOnly ? (
+            <>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Issue Gram:</Text>
+                <Text style={styles.sumVal}>{issueTotalPurity.toFixed(3)} g</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Receipt Gram:</Text>
+                <Text style={styles.sumVal}>- {receiptTotalPurity.toFixed(3)} g</Text>
+              </View>
+              <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
+                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Outstanding Balance:</Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: gramOutstanding >= 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  {Math.abs(gramOutstanding).toFixed(3)} g {gramOutstanding < 0 ? '(Credit)' : ''}
+                </Text>
+              </View>
 
-          <View style={styles.sumRow}>
-            <Text style={[styles.sumLabel, {fontWeight: '700', color: DARK_BROWN}]}>Subtotal Amount:</Text>
-            <Text style={[styles.sumVal, {fontWeight: '800'}]}>₹ {finalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-          </View>
+              <View style={{borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 10}} />
 
-          <View style={styles.sumRow}>
-            <Text style={[styles.sumLabel, {color: '#2E7D32'}]}>Collected Amount:</Text>
-            <Text style={[styles.sumVal, {color: '#2E7D32'}]}>₹ {collectedAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-          </View>
-          <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
-            <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Outstanding Amount:</Text>
-            <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: transactionOutstanding > 0 ? '#D32F2F' : '#2E7D32'}]}>
-              ₹ {Math.abs(transactionOutstanding).toLocaleString('en-IN', {maximumFractionDigits:2})} {transactionOutstanding < 0 ? '(Overpaid)' : ''}
-            </Text>
-          </View>
-          {transactionOutstanding > 0 && activeGoldRate > 0 && (
-            <View style={styles.sumRow}>
-              <Text style={[styles.sumLabel, {color: '#D32F2F'}]}>Outstanding Gram:</Text>
-              <Text style={[styles.sumVal, {color: '#D32F2F'}]}>{(transactionOutstanding / activeGoldRate).toFixed(3)} g</Text>
-            </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Old Balance (Before):</Text>
+                <Text style={styles.sumVal}>{oldBalanceBefore.toFixed(3)} g</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Old Balance (After):</Text>
+                <Text style={[styles.sumVal, {color: '#D32F2F'}]}>{oldBalanceAfter.toFixed(3)} g</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Issue Amount:</Text>
+                <Text style={styles.sumVal}>₹ {issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              {gstOn && (
+                <View style={styles.sumRow}>
+                  <Text style={styles.sumLabel}>Total GST ({parseFloat(cgstPercent||0)+parseFloat(sgstPercent||0)}%):</Text>
+                  <Text style={styles.sumVal}>₹ {(cgstVal + sgstVal).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                </View>
+              )}
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Receipt Amount:</Text>
+                <Text style={styles.sumVal}>- ₹ {receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+
+              <View style={{borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 10}} />
+
+              <View style={styles.sumRow}>
+                <Text style={[styles.sumLabel, {fontWeight: '700', color: DARK_BROWN}]}>Subtotal Amount:</Text>
+                <Text style={[styles.sumVal, {fontWeight: '800'}]}>₹ {finalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+
+              <View style={styles.sumRow}>
+                <Text style={[styles.sumLabel, {color: '#2E7D32'}]}>Collected Amount:</Text>
+                <Text style={[styles.sumVal, {color: '#2E7D32'}]}>₹ {collectedAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
+                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Outstanding Amount:</Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: transactionOutstanding > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  ₹ {Math.abs(transactionOutstanding).toLocaleString('en-IN', {maximumFractionDigits:2})} {transactionOutstanding < 0 ? '(Overpaid)' : ''}
+                </Text>
+              </View>
+              {transactionOutstanding > 0 && activeGoldRate > 0 && (
+                <View style={styles.sumRow}>
+                  <Text style={[styles.sumLabel, {color: '#D32F2F'}]}>Outstanding Gram:</Text>
+                  <Text style={[styles.sumVal, {color: '#D32F2F'}]}>{(transactionOutstanding / activeGoldRate).toFixed(3)} g</Text>
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -1110,42 +1533,6 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         </TouchableOpacity>
 
       </ScrollView>
-
-      {/* Barcode Scanner Modal */}
-      {isScanning && (
-        <Modal visible={isScanning} animationType="slide" transparent={false}>
-          <View style={{ flex: 1, backgroundColor: '#000' }}>
-            <CameraView
-              style={{ flex: 1 }}
-              facing="back"
-              enableTorch={scannerTorch}
-              barcodeScannerSettings={{ barcodeTypes: ["qr", "code128", "code39", "ean13", "ean8", "itf14"] }}
-              onBarcodeScanned={({ data }) => {
-                setIsScanning(false);
-                setScannerTorch(false);
-                const normalized = normalizeScanValue(data);
-                setPendingScanValue(normalized);
-              }}
-            >
-              <View style={styles.scannerOverlay}>
-                <View style={styles.scannerHeader}>
-                  <Text style={styles.scannerTitle}>Scan QR Code</Text>
-                  <View style={styles.scannerActions}>
-                    <TouchableOpacity onPress={() => setScannerTorch((prev) => !prev)} style={styles.scannerAction}>
-                      <MaterialCommunityIcons name={scannerTorch ? 'flashlight' : 'flashlight-off'} size={22} color="#FFF" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => { setScannerTorch(false); setIsScanning(false); }} style={styles.scannerClose}>
-                      <MaterialCommunityIcons name="close" size={28} color="#FFF" />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                <View style={styles.scannerFrame} />
-                <Text style={styles.scannerInstructions}>Position QR code inside the frame</Text>
-              </View>
-            </CameraView>
-          </View>
-        </Modal>
-      )}
 
     </View>
   );
@@ -1169,8 +1556,7 @@ const styles = StyleSheet.create({
   balValGreen: { fontSize: 14, color: '#2E7D32', fontWeight: '800', marginTop: 2 },
   barcodeRow: { flexDirection: 'row', marginBottom: 12, position: 'relative' },
   barcodeInput: { flex: 1, backgroundColor: '#FCFAF5', borderWidth: 1, borderColor: '#E5D8C0', borderRadius: 8, paddingHorizontal: 12, height: 44, color: DARK_BROWN, fontWeight: '600' },
-  scanBtn: { width: 44, height: 44, backgroundColor: '#2E7D32', borderRadius: 8, marginLeft: 8, alignItems: 'center', justifyContent: 'center' },
-  dropdown: { position: 'absolute', top: 46, left: 0, right: 52, backgroundColor: '#FFF', borderRadius: 8, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, maxHeight: 150, zIndex: 1000, borderWidth: 1, borderColor: '#DDD' },
+  dropdown: { position: 'absolute', top: 46, left: 0, right: 0, backgroundColor: '#FFF', borderRadius: 8, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, maxHeight: 150, zIndex: 1000, borderWidth: 1, borderColor: '#DDD' },
   dropItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   dropItemText: { fontSize: 13, color: DARK_BROWN, fontWeight: '600' },
   gridRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
@@ -1207,12 +1593,4 @@ const styles = StyleSheet.create({
   saveBtnText: { color: GOLD, fontWeight: '800', fontSize: 16 },
   
   // Scanner Styles
-  scannerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  scannerHeader: { position: 'absolute', top: 50, left: 20, right: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  scannerTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
-  scannerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  scannerAction: { padding: 8, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20 },
-  scannerClose: { padding: 8, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20 },
-  scannerFrame: { width: 220, height: 130, borderWidth: 2, borderColor: GOLD, backgroundColor: 'transparent' },
-  scannerInstructions: { color: '#FFF', marginTop: 30, fontSize: 16, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
 });

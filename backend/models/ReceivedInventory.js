@@ -4,7 +4,6 @@ const ReceivedInventorySchema = new mongoose.Schema(
   {
     receiptNumber: {
       type: String,
-      required: true,
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -41,6 +40,10 @@ const ReceivedInventorySchema = new mongoose.Schema(
       default: 0,
     },
     amount: {
+      type: Number,
+      default: 0,
+    },
+    sriCost: {
       type: Number,
       default: 0,
     },

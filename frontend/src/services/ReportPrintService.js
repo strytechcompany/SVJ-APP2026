@@ -8,7 +8,7 @@ const acquire = () => { if (_busy) return false; _busy = true; return true; };
 const release = () => { _busy = false; };
 
 const generateHTML = (data) => {
-  const { summaryCards, customerSales, plusSummary, debtPayable, debtReceivable, expenses, chitFunds, lineStock, metadata, calculations } = data;
+  const { summaryCards, customerSales, plusSummary, wastageSummary, debtPayable, debtReceivable, expenses, chitFunds, lineStock, metadata, calculations } = data;
 
   let dateText = 'Today';
   if (metadata.mode === 'CUSTOM_DATE') dateText = new Date(metadata.selectedDate).toLocaleDateString('en-GB');
@@ -72,13 +72,13 @@ const generateHTML = (data) => {
         </div>
 
         <div class="section">
-          <div class="section-title">1. Customer Sales (B2C, B2D)</div>
+          <div class="section-title">1. Customer Sales (B2C, B2D, Line Stocker)</div>
           <table>
             <tr><th>Customer</th><th>Item</th><th class="right">Weight (+Plus%)</th></tr>
             ${customerSales.map(s => `<tr>
-              <td>${s.customerName}<div class="sub">${s.phoneNumber} | ${s.billNumber}</div></td>
+              <td>${s.customerName}<div class="sub">${s.phoneNumber} | ${s.billNumber || '-'} | ${s.source}</div></td>
               <td>${s.itemName}</td>
-              <td class="right green">${s.weight}g (+${s.sriPlus}%)</td>
+              <td class="right green">${s.weight}g${s.sriPlus ? ` (+${s.sriPlus}%)` : ''}</td>
             </tr>`).join('')}
             <tr class="total-row"><td colspan="2">Total Sales</td><td class="right">${customerSales.reduce((s, i) => s + i.weight, 0).toFixed(3)}g</td></tr>
           </table>
@@ -96,7 +96,18 @@ const generateHTML = (data) => {
         </div>
 
         <div class="section">
-          <div class="section-title">3. Debt Payable (Advance &gt; 0)</div>
+          <div class="section-title">3. Wastage Summary</div>
+          <table>
+            <tr><th>Wastage</th><th class="center">Weight</th><th class="right">Profit</th></tr>
+            ${wastageSummary.map(w => `<tr>
+              <td>${Number(w.wastage || 0).toFixed(3)}g</td><td class="center">${w.totalWeight.toFixed(3)}g</td><td class="right green">${w.profit.toFixed(3)}g</td>
+            </tr>`).join('')}
+            <tr class="total-row"><td colspan="2">Total Profit</td><td class="right">${calculations.wastageSummaryProfit.toFixed(3)}g</td></tr>
+          </table>
+        </div>
+
+        <div class="section">
+          <div class="section-title">4. Debt Payable (Advance &gt; 0)</div>
           <table>
             <tr><th>Customer</th><th class="right">Advance</th></tr>
             ${debtPayable.map(c => `<tr><td>${c.customerName}<div class="sub">${c.phoneNumber}</div></td><td class="right red">${c.advance.toFixed(3)}g</td></tr>`).join('')}
@@ -105,7 +116,7 @@ const generateHTML = (data) => {
         </div>
 
         <div class="section">
-          <div class="section-title">4. Debt Receivable (Old Balance &gt; 0)</div>
+          <div class="section-title">5. Debt Receivable (Old Balance &gt; 0)</div>
           <table>
             <tr><th>Customer</th><th class="right">Old Balance</th></tr>
             ${debtReceivable.map(c => `<tr><td>${c.customerName}<div class="sub">${c.phoneNumber}</div></td><td class="right green">${c.oldBalance.toFixed(3)}g</td></tr>`).join('')}
@@ -114,7 +125,7 @@ const generateHTML = (data) => {
         </div>
 
         <div class="section">
-          <div class="section-title">5. Expenses</div>
+          <div class="section-title">6. Expenses</div>
           <table>
             <tr><th>Expense</th><th class="right">Amount</th></tr>
             ${expenses.map(e => `<tr><td>${e.expenseName}<div class="sub">${e.expenseType}</div></td><td class="right red">₹${e.amount}</td></tr>`).join('')}
@@ -123,7 +134,7 @@ const generateHTML = (data) => {
         </div>
 
         <div class="section">
-          <div class="section-title">6. Chit Funds</div>
+          <div class="section-title">7. Chit Funds</div>
           <table>
             <tr><th>Customer</th><th>Rate</th><th class="right">Amount</th><th class="right">Gold</th></tr>
             ${chitFunds.map(c => `<tr><td>${c.customerId?.customerName || ''}</td><td>₹${c.goldRate}</td><td class="right">₹${c.amount}</td><td class="right green">${c.purchasedWeight.toFixed(3)}g</td></tr>`).join('')}
@@ -132,7 +143,7 @@ const generateHTML = (data) => {
         </div>
 
         <div class="section">
-          <div class="section-title">7. Line Stocker Report</div>
+          <div class="section-title">8. Line Stocker Report</div>
           <table>
             <tr><th>Customer</th><th>Status</th><th class="right">Weight</th></tr>
             ${lineStock.map(ls => `<tr><td>${ls.customerName}</td><td>${ls.status}</td><td class="right ${ls.status === 'SETTLED' ? 'green' : 'red'}">${ls.totalIssuedGram.toFixed(3)}g</td></tr>`).join('')}

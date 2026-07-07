@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  StatusBar, ActivityIndicator, TextInput, Alert, Platform, Modal
+  StatusBar, ActivityIndicator, TextInput, Alert, Platform
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import { customerAPI, lineStockAPI, stockAPI } from '../../services/api';
 
 const GOLD = '#D4AF37';
@@ -63,11 +62,6 @@ export default function IssueLineStockScreen({ navigation }) {
   
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
-  
-  const [showScanner, setShowScanner] = useState(false);
-  const [scannerTorch, setScannerTorch] = useState(false);
-  const [pendingScan, setPendingScan] = useState(null);
-  const [permission, requestPermission] = useCameraPermissions();
 
   const normalizeScanValue = (value) => {
     const raw = String(value || '').trim();
@@ -151,36 +145,7 @@ export default function IssueLineStockScreen({ navigation }) {
     }
   };
 
-  // Handle scan via state to avoid stale-closure issues with native callbacks
-  useEffect(() => {
-    if (!pendingScan) return;
-    const val = pendingScan;
-    setPendingScan(null);
-    lookupAndAddStock(val);
-  }, [pendingScan]);
-
-  const handleBarcodeSubmitDirect = (code) => lookupAndAddStock(code);
   const handleBarcodeSubmit = () => lookupAndAddStock(barcodeSearch);
-
-  const openScanner = async () => {
-    if (!permission?.granted) {
-      const { granted } = await requestPermission();
-      if (!granted) {
-        Alert.alert('Permission Required', 'Camera permission is needed to scan barcodes.');
-        return;
-      }
-    }
-    setScannerTorch(false);
-    setShowScanner(true);
-  };
-
-  const handleBarCodeScanned = ({ data }) => {
-    setShowScanner(false);
-    setScannerTorch(false);
-    const normalized = normalizeScanValue(data);
-    setBarcodeSearch(normalized);
-    setPendingScan(normalized);
-  };
 
   useEffect(() => {
     // Load LINE_STOCKER customers
@@ -405,12 +370,10 @@ export default function IssueLineStockScreen({ navigation }) {
           <View style={{ zIndex: 10 }}>
             <View style={styles.scanRow}>
               <View style={styles.scanInputWrap}>
-                <TouchableOpacity onPress={openScanner} style={{ padding: 4 }}>
-                  <MaterialCommunityIcons name="barcode-scan" size={24} color={GOLD} />
-                </TouchableOpacity>
+                <MaterialCommunityIcons name="magnify" size={20} color={GOLD} style={{ marginRight: 4 }} />
                 <TextInput
                   style={styles.scanInput}
-                  placeholder="Scan QR Code or Search by Name..."
+                  placeholder="Search by Name or Item Number..."
                   placeholderTextColor="#C4A97A"
                   value={barcodeSearch}
                   onChangeText={setBarcodeSearch}
@@ -508,37 +471,6 @@ export default function IssueLineStockScreen({ navigation }) {
           <Text style={styles.submitBtnText}>{saving ? 'Issuing...' : 'Issue Line Stock'}</Text>
         </TouchableOpacity>
       </ScrollView>
-
-      {/* Scanner Modal */}
-      <Modal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}>
-        <View style={styles.scannerContainer}>
-          <View style={[styles.scannerHeader, { paddingTop: topPad }]}>
-            <TouchableOpacity onPress={() => setShowScanner(false)} style={{ padding: 8 }}>
-              <MaterialCommunityIcons name="close" size={28} color="#FFF" />
-            </TouchableOpacity>
-            <Text style={styles.scannerTitle}>Scan QR Code</Text>
-            <View style={{ width: 44 }} />
-          </View>
-          <CameraView
-            style={StyleSheet.absoluteFillObject}
-            facing="back"
-            enableTorch={scannerTorch}
-            barcodeScannerSettings={{
-              barcodeTypes: ["qr", "code128", "code39", "ean13", "ean8", "itf14"],
-            }}
-            onBarcodeScanned={handleBarCodeScanned}
-          />
-          <View pointerEvents="box-none" style={styles.scannerOverlay}>
-            <View style={styles.scannerTarget} />
-            <View style={styles.scannerControls}>
-              <TouchableOpacity style={styles.scannerControlBtn} onPress={() => setScannerTorch((prev) => !prev)}>
-                <MaterialCommunityIcons name={scannerTorch ? 'flashlight' : 'flashlight-off'} size={22} color="#FFF" />
-                <Text style={styles.scannerControlText}>{scannerTorch ? 'Torch On' : 'Torch Off'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -589,12 +521,4 @@ const styles = StyleSheet.create({
   submitBtn: { flexDirection: 'row', backgroundColor: DARK_BROWN, paddingVertical: 16, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 8, elevation: 4 },
   submitBtnText: { color: GOLD, fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
   
-  scannerContainer: { flex: 1, backgroundColor: '#000' },
-  scannerHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 16, backgroundColor: 'rgba(0,0,0,0.5)' },
-  scannerTitle: { color: '#FFF', fontSize: 18, fontWeight: '800' },
-  scannerOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' },
-  scannerTarget: { width: 220, height: 220, borderWidth: 2, borderColor: GOLD, backgroundColor: 'rgba(255,255,255,0.1)' },
-  scannerControls: { position: 'absolute', bottom: 40, alignSelf: 'center', pointerEvents: 'auto' },
-  scannerControlBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0,0,0,0.65)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999 },
-  scannerControlText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
 });

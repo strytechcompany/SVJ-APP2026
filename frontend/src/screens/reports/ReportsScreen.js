@@ -80,6 +80,7 @@ export default function ReportsScreen({ navigation }) {
     let lineStockOutstanding = 0; data.lineStock.forEach(ls => lineStockOutstanding += ls.totalIssuedGram);
 
     let customerSalesProfit = 0; data.plusSummary.forEach(p => customerSalesProfit += p.profit);
+    let wastageSummaryProfit = 0; data.wastageSummary.forEach(w => wastageSummaryProfit += w.profit);
     let expensesTotal = 0; data.expenses.forEach(e => expensesTotal += e.amount);
 
     const exportData = {
@@ -90,7 +91,7 @@ export default function ReportsScreen({ navigation }) {
       },
       calculations: {
         debtReceivable, debtPayable, chitCollection, lineStockOutstanding,
-        customerSalesProfit, expensesTotal,
+        customerSalesProfit, wastageSummaryProfit, expensesTotal,
       }
     };
 
@@ -156,6 +157,9 @@ export default function ReportsScreen({ navigation }) {
     let customerSalesProfit = 0;
     data.plusSummary.forEach(p => customerSalesProfit += p.profit);
 
+    let wastageSummaryProfit = 0;
+    data.wastageSummary.forEach(w => wastageSummaryProfit += w.profit);
+
     let expensesTotal = 0;
     data.expenses.forEach(e => expensesTotal += e.amount);
 
@@ -163,11 +167,18 @@ export default function ReportsScreen({ navigation }) {
       <>
         {/* SECTION 1: CUSTOMER SALES */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>1. CUSTOMER SALES (B2C, B2D)</Text>
+          <Text style={styles.sectionTitle}>1. CUSTOMER SALES (B2C, B2D, LINE STOCKER)</Text>
           {data.customerSales.map((sale, idx) => (
             <View key={idx} style={styles.tableRow}>
-              <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{sale.customerName}</Text><Text style={styles.rowSub}>{sale.phoneNumber} | {sale.billNumber}</Text></View>
-              <View style={{ alignItems: 'flex-end' }}><Text style={styles.rowValue}>{sale.itemName}</Text><Text style={[styles.rowValue, { color: '#27AE60' }]}>{sale.weight}g (+{sale.sriPlus}%)</Text></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{sale.customerName}</Text>
+                <Text style={styles.rowSub}>{sale.phoneNumber} | {sale.billNumber || '-'}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.rowValue}>{sale.itemName}</Text>
+                <Text style={[styles.rowValue, { color: '#27AE60' }]}>{sale.weight}g{sale.sriPlus ? ` (+${sale.sriPlus}%)` : ''}</Text>
+                <Text style={styles.sourceTag}>{sale.source}</Text>
+              </View>
             </View>
           ))}
           <View style={styles.divider} />
@@ -193,9 +204,28 @@ export default function ReportsScreen({ navigation }) {
           <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Profit</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>{customerSalesProfit.toFixed(3)}g</Text></View>
         </View>
 
-        {/* SECTION 3: DEBT PAYABLE */}
+        {/* SECTION 3: WASTAGE SUMMARY */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>3. DEBT PAYABLE (Advance > 0)</Text>
+          <Text style={styles.sectionTitle}>3. WASTAGE SUMMARY TABLE</Text>
+          <View style={styles.tableHeaderRow}>
+            <Text style={[styles.tableHeader, { flex: 1 }]}>Wastage</Text>
+            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'center' }]}>Weight</Text>
+            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'right' }]}>Profit</Text>
+          </View>
+          {data.wastageSummary.map((w, idx) => (
+            <View key={idx} style={styles.tableRow}>
+              <Text style={[styles.rowValue, { flex: 1 }]}>{Number(w.wastage || 0).toFixed(3)}g</Text>
+              <Text style={[styles.rowValue, { flex: 1, textAlign: 'center' }]}>{w.totalWeight.toFixed(3)}g</Text>
+              <Text style={[styles.rowValue, { flex: 1, textAlign: 'right', color: '#27AE60' }]}>{w.profit.toFixed(3)}g</Text>
+            </View>
+          ))}
+          <View style={styles.divider} />
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Profit</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>{wastageSummaryProfit.toFixed(3)}g</Text></View>
+        </View>
+
+        {/* SECTION 4: DEBT PAYABLE */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>4. DEBT PAYABLE (Advance > 0)</Text>
           {data.debtPayable.map((c, idx) => (
             <View key={idx} style={styles.tableRow}>
               <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{c.customerName}</Text><Text style={styles.rowSub}>{c.phoneNumber}</Text></View>
@@ -206,9 +236,9 @@ export default function ReportsScreen({ navigation }) {
           <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Payable</Text><Text style={[styles.calcValueTotal, { color: '#E74C3C' }]}>{debtPayable.toFixed(3)}g</Text></View>
         </View>
 
-        {/* SECTION 4: DEBT RECEIVABLE */}
+        {/* SECTION 5: DEBT RECEIVABLE */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>4. DEBT RECEIVABLE (Old Bal > 0)</Text>
+          <Text style={styles.sectionTitle}>5. DEBT RECEIVABLE (Old Bal > 0)</Text>
           {data.debtReceivable.map((c, idx) => (
             <View key={idx} style={styles.tableRow}>
               <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{c.customerName}</Text><Text style={styles.rowSub}>{c.phoneNumber}</Text></View>
@@ -219,9 +249,9 @@ export default function ReportsScreen({ navigation }) {
           <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Receivable</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>{debtReceivable.toFixed(3)}g</Text></View>
         </View>
 
-        {/* SECTION 5: EXPENSES */}
+        {/* SECTION 6: EXPENSES */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>5. EXPENSES</Text>
+          <Text style={styles.sectionTitle}>6. EXPENSES</Text>
           {data.expenses.map((e, idx) => (
             <View key={idx} style={styles.tableRow}>
               <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{e.expenseName}</Text><Text style={styles.rowSub}>{e.expenseType}</Text></View>
@@ -232,9 +262,9 @@ export default function ReportsScreen({ navigation }) {
           <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Expenses</Text><Text style={[styles.calcValueTotal, { color: '#E74C3C' }]}>₹{expensesTotal}</Text></View>
         </View>
 
-        {/* SECTION 6: CHIT FUNDS */}
+        {/* SECTION 7: CHIT FUNDS */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>6. CHIT FUNDS REPORT</Text>
+          <Text style={styles.sectionTitle}>7. CHIT FUNDS REPORT</Text>
           {data.chitFunds.map((c, idx) => (
             <View key={idx} style={styles.tableRow}>
               <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{c.customerId?.customerName}</Text><Text style={styles.rowSub}>Rate: ₹{c.goldRate}</Text></View>
@@ -246,9 +276,9 @@ export default function ReportsScreen({ navigation }) {
           <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Purchased Gram</Text><Text style={styles.calcValueTotal}>{chitCollection.toFixed(3)}g</Text></View>
         </View>
 
-        {/* SECTION 7: LINE STOCKER */}
+        {/* SECTION 8: LINE STOCKER */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>7. LINE STOCKER REPORT</Text>
+          <Text style={styles.sectionTitle}>8. LINE STOCKER REPORT</Text>
           {data.lineStock.map((ls, idx) => (
             <View key={idx} style={styles.tableRow}>
               <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{ls.customerName}</Text><Text style={styles.rowSub}>{ls.status}</Text></View>
@@ -370,6 +400,7 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 13, fontWeight: '700', color: DARK_BROWN },
   rowSub: { fontSize: 11, color: '#888', marginTop: 2 },
   rowValue: { fontSize: 14, fontWeight: '800', color: DARK_BROWN },
+  sourceTag: { fontSize: 9, fontWeight: '700', color: '#A08850', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.3 },
   tableHeaderRow: { flexDirection: 'row', borderBottomWidth: 2, borderBottomColor: '#EEE', paddingBottom: 6, marginBottom: 8 },
   tableHeader: { fontSize: 12, fontWeight: '800', color: '#888' },
   pdfBtn: { backgroundColor: '#C0392B', flexDirection: 'row', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', elevation: 4, marginTop: 8 },

@@ -15,6 +15,13 @@ const IssueItemSchema = new mongoose.Schema({
   plus: Number,
   purity: Number,
   amount: Number,
+  // Wastage-account fields (customerCategory === 'WASTAGE')
+  wastage: Number,
+  value1: Number,
+  actualTouch: Number,
+  takenTouch: Number,
+  value2: Number,
+  profit: Number,
 });
 
 const ReceiptItemSchema = new mongoose.Schema({
@@ -26,6 +33,8 @@ const ReceiptItemSchema = new mongoose.Schema({
   takenTouch: Number,
   purity: Number,
   amount: Number,
+  // B2D receipt field: purity = weight * (sriCost / 100)
+  sriCost: Number,
 });
 
 const PaymentDetailsSchema = new mongoose.Schema({
@@ -76,7 +85,13 @@ const TransactionSchema = new mongoose.Schema(
 
     finalAmount: Number,
     balanceAmount: Number,
-    
+
+    // Wastage-account bill: gram-based ledger, no money involved
+    isWastage: {
+      type: Boolean,
+      default: false,
+    },
+
     // For storing gold rate at the time of transaction
     goldRate: Number,
 

@@ -49,7 +49,7 @@ exports.getReportData = async (req, res) => {
       transactionType: { $in: ['B2C', 'B2D'] }
     });
 
-    // 2. Customer Sales Table (Itemized)
+    // 2. Customer Sales Table (Itemized) — B2C (Plus & Wastage) and B2D issued items
     const customerSalesAgg = await Transaction.aggregate([
       { $match: { createdAt: dateFilter, transactionType: { $in: ['B2C', 'B2D'] } } },
       { $unwind: "$issueItems" },
@@ -64,20 +64,53 @@ exports.getReportData = async (req, res) => {
           weight: "$issueItems.weight",
           sriCost: "$issueItems.sriCost",
           sriBill: "$issueItems.sriBill",
-          sriPlus: "$issueItems.plus"
+          sriPlus: "$issueItems.plus",
+          source: {
+            $cond: [
+              { $eq: ["$transactionType", "B2D"] },
+              "B2D",
+              { $cond: [{ $eq: ["$isWastage", true] }, "B2C-WASTAGE", "B2C-PLUS"] }
+            ]
+          }
         }
       },
       { $sort: { date: -1 } }
     ]);
 
-    // 3. Plus Summary Table
+    // 2b. Line Stocker issued items also count as "customer sales" issues
+    const lineStockerSalesAgg = await LineStockTransaction.aggregate([
+      { $match: { issueDate: dateFilter } },
+      { $unwind: "$issuedProducts" },
+      { $lookup: { from: "customers", localField: "customerId", foreignField: "_id", as: "customer" } },
+      { $unwind: "$customer" },
+      { $project: {
+          customerName: "$customer.customerName",
+          phoneNumber: "$customer.phoneNumber",
+          date: "$issueDate",
+          billNumber: "$issuedProducts.billNo",
+          itemName: "$issuedProducts.itemName",
+          weight: "$issuedProducts.weight",
+          sriCost: { $literal: null },
+          sriBill: { $literal: null },
+          sriPlus: { $literal: null },
+          source: { $literal: "LINE_STOCKER" }
+        }
+      },
+      { $sort: { date: -1 } }
+    ]);
+
+    // Combined itemized sales across every channel that issues stock to a customer
+    const combinedCustomerSales = [...customerSalesAgg, ...lineStockerSalesAgg]
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // 3. Plus Summary Table — genuine PLUS-category B2C sales only (excludes B2D & WASTAGE issues)
     const plusSummaryAgg = await Transaction.aggregate([
-      { $match: { createdAt: dateFilter, transactionType: { $in: ['B2C', 'B2D'] } } },
+      { $match: { createdAt: dateFilter, transactionType: 'B2C', isWastage: { $ne: true } } },
       { $unwind: "$issueItems" },
-      { $group: { 
-          _id: "$issueItems.plus", 
-          totalWeight: { $sum: "$issueItems.weight" } 
-        } 
+      { $group: {
+          _id: "$issueItems.plus",
+          totalWeight: { $sum: "$issueItems.weight" }
+        }
       },
       { $project: {
           plus: "$_id",
@@ -86,6 +119,25 @@ exports.getReportData = async (req, res) => {
         }
       },
       { $sort: { plus: -1 } }
+    ]);
+
+    // 3b. Wastage Summary Table — from items issued to WASTAGE-category B2C customers
+    const wastageSummaryAgg = await Transaction.aggregate([
+      { $match: { createdAt: dateFilter, transactionType: 'B2C', isWastage: true } },
+      { $unwind: "$issueItems" },
+      { $group: {
+          _id: "$issueItems.wastage",
+          totalWeight: { $sum: "$issueItems.weight" },
+          profit: { $sum: "$issueItems.profit" }
+        }
+      },
+      { $project: {
+          wastage: "$_id",
+          totalWeight: 1,
+          profit: 1
+        }
+      },
+      { $sort: { wastage: -1 } }
     ]);
 
     // 4. Debt Payable (Advance > 0)
@@ -138,8 +190,9 @@ exports.getReportData = async (req, res) => {
           totalSalesCount,
           currentCashAmount
         },
-        customerSales: customerSalesAgg,
+        customerSales: combinedCustomerSales,
         plusSummary: plusSummaryAgg,
+        wastageSummary: wastageSummaryAgg,
         debtPayable,
         debtReceivable,
         expenses,

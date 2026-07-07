@@ -98,13 +98,6 @@ export default function AddStockScreen({ navigation, route }) {
     setNetWeight(text); // Net weight = Gross weight
   };
 
-  // ─── Generate QR Code ─────────────────────────────────────────────────────
-  const generateBarcode = () => {
-    const ts = Date.now().toString(36).toUpperCase();
-    const rand = Math.random().toString(36).substring(2, 7).toUpperCase();
-    setBarcode(`SVJ${ts}${rand}`);
-  };
-
   // ─── Print QR Label via thermal printer ────────────────────────────────────
   const printBarcode = async () => {
     if (!barcode) {
@@ -313,7 +306,7 @@ export default function AddStockScreen({ navigation, route }) {
           />
 
           {/* Buying Touch & Quantity Row */}
-          <View style={styles.rowFields}>
+          {/* <View style={styles.rowFields}>
             <View style={[styles.fieldGroup, { flex: 1, marginRight: 8 }]}>
               <Text style={styles.fieldLabel}>Buying Touch %</Text>
               <TextInput
@@ -336,19 +329,12 @@ export default function AddStockScreen({ navigation, route }) {
                 keyboardType="number-pad"
               />
             </View>
-          </View>
+          </View> */}
 
           {/* Barcode Section */}
+          
           <View style={styles.fieldGroup}>
-            <Text style={styles.fieldLabel}>QR Code</Text>
-            <TouchableOpacity
-              style={styles.barcodeBtn}
-              onPress={generateBarcode}
-              activeOpacity={0.8}
-            >
-              <MaterialCommunityIcons name="qrcode" size={20} color={HEADER_BG} />
-              <Text style={styles.barcodeBtnText}>Generate QR</Text>
-            </TouchableOpacity>
+            {/* <Text style={styles.fieldLabel}>QR Code</Text> */}
 
             {barcode ? (
               <>
@@ -516,26 +502,6 @@ const styles = StyleSheet.create({
   },
   rowFields: {
     flexDirection: 'row',
-  },
-  barcodeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: GOLD,
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    alignSelf: 'flex-start',
-    gap: 8,
-    shadowColor: GOLD,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  barcodeBtnText: {
-    color: HEADER_BG,
-    fontWeight: '700',
-    fontSize: 14,
   },
   barcodePreview: {
     flexDirection: 'row',

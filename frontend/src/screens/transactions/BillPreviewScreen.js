@@ -113,10 +113,10 @@ export default function BillPreviewScreen({ navigation, route }) {
   const {
     _id, createdAt, transactionType, customerId, issueItems = [], receiptItems = [],
     paymentMode, paymentDetails, description,
-    issueTotalWeight, issueTotalAmount, receiptTotalWeight, receiptTotalAmount,
+    issueTotalWeight, issueTotalPurity, issueTotalAmount, receiptTotalWeight, receiptTotalPurity, receiptTotalAmount,
     finalAmount, goldRate, goldPaymentWeight, goldPaymentPurity, goldConvertedAmount,
     oldBalanceBefore, oldBalanceAfter, advanceBalanceBefore, advanceBalanceAfter, convertedGram, gstDetails,
-    commonBillNo,
+    commonBillNo, isWastage,
   } = transaction;
 
   // In preview mode customerId is a plain ID string; use transaction.customer instead
@@ -127,6 +127,9 @@ export default function BillPreviewScreen({ navigation, route }) {
   const dateStr = new Date(createdAt).toLocaleDateString('en-GB');
   const timeStr = new Date(createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   const collectedAmount = paymentMode === 'Gold' ? goldConvertedAmount : (paymentDetails?.amount || 0);
+  // B2D is also a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance
+  const isB2DBill = transactionType === 'B2D';
+  const isGramOnly = isWastage || isB2DBill;
 
   return (
     <View style={styles.container}>
@@ -178,25 +181,75 @@ export default function BillPreviewScreen({ navigation, route }) {
             <>
               <Text style={styles.divider}>--------------------------------</Text>
               <Text style={styles.sectionTitle}>ISSUED PRODUCTS</Text>
-              <View style={styles.tableHeader}>
-                <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
-                <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
-                <Text style={[styles.th, {flex: 1}]}>Purity</Text>
-                <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Amt(₹)</Text>
-              </View>
-              {issueItems.map((item, index) => (
-                <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
-                  <View style={styles.tr}>
-                    <Text style={[styles.td, {flex: 2.5}]}>{item.itemName || item.itemNumber || '-'}</Text>
-                    <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
-                    <Text style={[styles.td, {flex: 1}]}>{Number(item.purity).toFixed(2)}</Text>
-                    <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{Number(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              {isWastage ? (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, {flex: 2}]}>Item</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Wst(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>A.Tch%</Text>
+                    <Text style={[styles.th, {flex: 1, textAlign: 'right'}]}>Purity</Text>
                   </View>
-                </View>
-              ))}
-              <Text style={styles.dividerDotted}>................................</Text>
-              <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{issueTotalWeight.toFixed(3)}g</Text></View>
-              <View style={styles.row}><Text style={styles.monoBold}>Total Amt:</Text><Text style={styles.monoBold}>₹{issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                  {issueItems.map((item, index) => (
+                    <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
+                      <View style={styles.tr}>
+                        <Text style={[styles.td, {flex: 2}]}>{item.itemName || item.itemNumber || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.wastage || 0).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.actualTouch || 0).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1, textAlign: 'right'}]}>{Number(item.purity).toFixed(3)}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.dividerDotted}>................................</Text>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{issueTotalWeight.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Purity:</Text><Text style={styles.monoBold}>{issueTotalPurity.toFixed(3)}g</Text></View>
+                </>
+              ) : isB2DBill ? (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>A.Tch%</Text>
+                    <Text style={[styles.th, {flex: 1.2, textAlign: 'right'}]}>Purity</Text>
+                  </View>
+                  {issueItems.map((item, index) => (
+                    <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
+                      <View style={styles.tr}>
+                        <Text style={[styles.td, {flex: 2.5}]}>{item.itemName || item.itemNumber || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.actualTouch || 0).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1.2, textAlign: 'right'}]}>{Number(item.purity).toFixed(3)}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.dividerDotted}>................................</Text>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{issueTotalWeight.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Purity:</Text><Text style={styles.monoBold}>{issueTotalPurity.toFixed(3)}g</Text></View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Purity</Text>
+                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Amt(₹)</Text>
+                  </View>
+                  {issueItems.map((item, index) => (
+                    <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
+                      <View style={styles.tr}>
+                        <Text style={[styles.td, {flex: 2.5}]}>{item.itemName || item.itemNumber || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.purity).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{Number(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.dividerDotted}>................................</Text>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{issueTotalWeight.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Amt:</Text><Text style={styles.monoBold}>₹{issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                </>
+              )}
             </>
           )}
 
@@ -204,29 +257,79 @@ export default function BillPreviewScreen({ navigation, route }) {
             <>
               <Text style={styles.divider}>--------------------------------</Text>
               <Text style={styles.sectionTitle}>RECEIVED ITEMS</Text>
-              <View style={styles.tableHeader}>
-                <Text style={[styles.th, {flex: 2.5}]}>Type</Text>
-                <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
-                <Text style={[styles.th, {flex: 1}]}>Purity</Text>
-                <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Amt(₹)</Text>
-              </View>
-              {receiptItems.map((item, index) => (
-                <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
-                  <View style={styles.tr}>
-                    <Text style={[styles.td, {flex: 2.5}]}>{item.receiptType || '-'}</Text>
-                    <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
-                    <Text style={[styles.td, {flex: 1}]}>{Number(item.purity).toFixed(2)}</Text>
-                    <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{Number(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              {isWastage ? (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, {flex: 2}]}>Type</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Less(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>T.Tch%</Text>
+                    <Text style={[styles.th, {flex: 1, textAlign: 'right'}]}>Purity</Text>
                   </View>
-                </View>
-              ))}
-              <Text style={styles.dividerDotted}>................................</Text>
-              <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{receiptTotalWeight.toFixed(3)}g</Text></View>
-              <View style={styles.row}><Text style={styles.monoBold}>Total Amt:</Text><Text style={styles.monoBold}>₹{receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                  {receiptItems.map((item, index) => (
+                    <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
+                      <View style={styles.tr}>
+                        <Text style={[styles.td, {flex: 2}]}>{item.receiptType || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.less || 0).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.takenTouch || 0).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1, textAlign: 'right'}]}>{Number(item.purity).toFixed(3)}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.dividerDotted}>................................</Text>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{receiptTotalWeight.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Purity:</Text><Text style={styles.monoBold}>{receiptTotalPurity.toFixed(3)}g</Text></View>
+                </>
+              ) : isB2DBill ? (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>SRI%</Text>
+                    <Text style={[styles.th, {flex: 1.2, textAlign: 'right'}]}>Purity</Text>
+                  </View>
+                  {receiptItems.map((item, index) => (
+                    <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
+                      <View style={styles.tr}>
+                        <Text style={[styles.td, {flex: 2.5}]}>{item.receiptType || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.sriCost || 0).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1.2, textAlign: 'right'}]}>{Number(item.purity).toFixed(3)}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.dividerDotted}>................................</Text>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{receiptTotalWeight.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Purity:</Text><Text style={styles.monoBold}>{receiptTotalPurity.toFixed(3)}g</Text></View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={[styles.th, {flex: 2.5}]}>Type</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Purity</Text>
+                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Amt(₹)</Text>
+                  </View>
+                  {receiptItems.map((item, index) => (
+                    <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
+                      <View style={styles.tr}>
+                        <Text style={[styles.td, {flex: 2.5}]}>{item.receiptType || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1}]}>{Number(item.purity).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{Number(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={styles.dividerDotted}>................................</Text>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{receiptTotalWeight.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Amt:</Text><Text style={styles.monoBold}>₹{receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                </>
+              )}
             </>
           )}
 
-          {collectedAmount > 0 && (
+          {!isGramOnly && collectedAmount > 0 && (
             <>
               <Text style={styles.divider}>--------------------------------</Text>
               <Text style={styles.sectionTitle}>PAYMENT DETAILS</Text>
@@ -239,38 +342,57 @@ export default function BillPreviewScreen({ navigation, route }) {
 
           <Text style={styles.divider}>--------------------------------</Text>
           <Text style={styles.sectionTitle}>SUMMARY</Text>
-          {issueTotalAmount > 0 && <View style={styles.row}><Text style={styles.mono}>Issue Amount:</Text><Text style={styles.mono}>₹{issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>}
-          {gstDetails?.isOn && issueTotalAmount > 0 && (
+          {isGramOnly ? (
             <>
-              {gstDetails.hsnCode ? <View style={styles.row}><Text style={styles.mono}>HSN Code:</Text><Text style={styles.mono}>{gstDetails.hsnCode}</Text></View> : null}
-              <View style={styles.row}><Text style={styles.mono}>CGST ({gstDetails.cgstPercent}%):</Text><Text style={styles.mono}>₹{gstDetails.cgstAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
-              <View style={styles.row}><Text style={styles.mono}>SGST ({gstDetails.sgstPercent}%):</Text><Text style={styles.mono}>₹{gstDetails.sgstAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Issue Gram:</Text><Text style={styles.mono}>{issueTotalPurity.toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Receipt Gram:</Text><Text style={styles.mono}>- {receiptTotalPurity.toFixed(3)}g</Text></View>
+              <View style={styles.row}>
+                <Text style={styles.monoBold}>OUTSTANDING BALANCE:</Text>
+                <Text style={styles.monoBold}>{Math.abs(transaction.balanceAmount || (issueTotalPurity - receiptTotalPurity)).toFixed(3)}g</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              {issueTotalAmount > 0 && <View style={styles.row}><Text style={styles.mono}>Issue Amount:</Text><Text style={styles.mono}>₹{issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>}
+              {gstDetails?.isOn && issueTotalAmount > 0 && (
+                <>
+                  {gstDetails.hsnCode ? <View style={styles.row}><Text style={styles.mono}>HSN Code:</Text><Text style={styles.mono}>{gstDetails.hsnCode}</Text></View> : null}
+                  <View style={styles.row}><Text style={styles.mono}>CGST ({gstDetails.cgstPercent}%):</Text><Text style={styles.mono}>₹{gstDetails.cgstAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                  <View style={styles.row}><Text style={styles.mono}>SGST ({gstDetails.sgstPercent}%):</Text><Text style={styles.mono}>₹{gstDetails.sgstAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                </>
+              )}
+              {receiptTotalAmount > 0 && <View style={styles.row}><Text style={styles.mono}>Receipt Amount:</Text><Text style={styles.mono}>- ₹{receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>}
+              {(issueTotalAmount > 0 || receiptTotalAmount > 0) && (
+                <View style={styles.row}><Text style={styles.monoBold}>SUBTOTAL AMOUNT:</Text><Text style={styles.monoBold}>₹{finalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              )}
+              {collectedAmount > 0 && (
+                <View style={styles.row}><Text style={styles.monoBold}>COLLECTED AMOUNT:</Text><Text style={styles.monoBold}>- ₹{collectedAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              )}
+
+              <View style={styles.row}>
+                <Text style={styles.monoBold}>OUTSTANDING AMOUNT:</Text>
+                <Text style={styles.monoBold}>₹{Math.abs(transaction.outstandingAmount || (finalAmount - collectedAmount)).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
             </>
           )}
-          {receiptTotalAmount > 0 && <View style={styles.row}><Text style={styles.mono}>Receipt Amount:</Text><Text style={styles.mono}>- ₹{receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>}
-          {(issueTotalAmount > 0 || receiptTotalAmount > 0) && (
-            <View style={styles.row}><Text style={styles.monoBold}>SUBTOTAL AMOUNT:</Text><Text style={styles.monoBold}>₹{finalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
-          )}
-          {collectedAmount > 0 && (
-            <View style={styles.row}><Text style={styles.monoBold}>COLLECTED AMOUNT:</Text><Text style={styles.monoBold}>- ₹{collectedAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
-          )}
-          
-          <View style={styles.row}>
-            <Text style={styles.monoBold}>OUTSTANDING AMOUNT:</Text>
-            <Text style={styles.monoBold}>₹{Math.abs(transaction.outstandingAmount || (finalAmount - collectedAmount)).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-          </View>
 
           <Text style={styles.divider}>--------------------------------</Text>
           <Text style={styles.sectionTitle}>TRANSACTION SUMMARY</Text>
-          <View style={styles.row}><Text style={styles.mono}>Converted Gram:</Text><Text style={styles.mono}>{Number(convertedGram).toFixed(3)}g</Text></View>
-          {((transaction.outstandingAmount || (finalAmount - collectedAmount)) > 0) && (
-            <View style={styles.row}>
-              <Text style={styles.monoBold}>Outstanding Gram:</Text>
-              <Text style={[styles.monoBold, {color:'#D32F2F'}]}>{(transaction.outstandingGram || (Math.max(0, finalAmount - collectedAmount) / goldRate)).toFixed(3)}g</Text>
-            </View>
+          {!isGramOnly && (
+            <>
+              <View style={styles.row}><Text style={styles.mono}>Converted Gram:</Text><Text style={styles.mono}>{Number(convertedGram).toFixed(3)}g</Text></View>
+              {((transaction.outstandingAmount || (finalAmount - collectedAmount)) > 0) && (
+                <View style={styles.row}>
+                  <Text style={styles.monoBold}>Outstanding Gram:</Text>
+                  <Text style={[styles.monoBold, {color:'#D32F2F'}]}>{(transaction.outstandingGram || (Math.max(0, finalAmount - collectedAmount) / goldRate)).toFixed(3)}g</Text>
+                </View>
+              )}
+            </>
           )}
           <View style={styles.row}><Text style={styles.mono}>New Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
-          <View style={styles.row}><Text style={styles.mono}>New Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
+          {!isGramOnly && (
+            <View style={styles.row}><Text style={styles.mono}>New Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
+          )}
 
           <Text style={styles.divider}>--------------------------------</Text>
           <View style={{ marginTop: 15, marginBottom: 10 }}>
