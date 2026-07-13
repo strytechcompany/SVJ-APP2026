@@ -46,6 +46,24 @@ const getWeight = (item) => toNumber(
   )
 );
 
+const parseItemCode = (itemNumber) => {
+  const str = String(itemNumber || '').trim().toUpperCase();
+  const match = str.match(/^([A-Za-z]*)(\d+)/);
+  if (match) {
+    return { prefix: match[1], num: parseInt(match[2], 10) };
+  }
+  return { prefix: str, num: 0 };
+};
+
+const sortByItemNumber = (records) => {
+  return [...records].sort((a, b) => {
+    const pa = parseItemCode(a.itemNumber);
+    const pb = parseItemCode(b.itemNumber);
+    if (pa.prefix !== pb.prefix) return pa.prefix.localeCompare(pb.prefix);
+    return pa.num - pb.num;
+  });
+};
+
 function ItemRow({ item, onEdit, onDelete, onPress }) {
   return (
     <TouchableOpacity
@@ -213,7 +231,7 @@ export default function DesignCard({ group, onDelete, onEdit, onItemPress, isAdm
       {/* Items */}
       {expanded && (
         <View style={styles.itemsBlock}>
-          {group.records.map((item, idx) => (
+          {sortByItemNumber(group.records).map((item, idx) => (
             <View key={item._id}>
               {idx > 0 && <View style={styles.separator} />}
               <ItemRow
