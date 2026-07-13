@@ -229,6 +229,12 @@ export const StockProvider = ({ children }) => {
     return res.data;
   }, [onRefresh]);
 
+  const deleteStockGroup = useCallback(async (designName) => {
+    const res = await stockAPI.removeGroup(designName);
+    if (res.data.success) onRefresh();
+    return res.data;
+  }, [onRefresh]);
+
   const getStockById = useCallback(async (id) => {
     const res = await stockAPI.getById(id);
     return res.data;
@@ -246,7 +252,7 @@ export const StockProvider = ({ children }) => {
     <StockContext.Provider
       value={{
         stocks, summary, pagination, searchQuery, setSearchQuery, selectedCategory, setSelectedCategory,
-        fetchStocks, fetchSummary, loadMoreStocks, createStock, updateStock, deleteStock, getStockById,
+        fetchStocks, fetchSummary, loadMoreStocks, createStock, updateStock, deleteStock, deleteStockGroup, getStockById,
         
         receivedInventory, receivedSummary, receivedPagination, receivedFilter, setReceivedFilter,
         fetchReceivedInventory, fetchReceivedSummary, loadMoreReceived,

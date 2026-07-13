@@ -108,8 +108,8 @@ function ItemRow({ item, onEdit, onDelete, onPress }) {
           onPress={(e) => {
             e.stopPropagation?.();
             Alert.alert(
-              'Delete Item',
-              `Delete ${item.itemNumber}?`,
+              'Delete Stock Item',
+              'Are you sure you want to delete this stock item?',
               [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -129,7 +129,7 @@ function ItemRow({ item, onEdit, onDelete, onPress }) {
   );
 }
 
-export default function DesignCard({ group, onDelete, onEdit, onItemPress }) {
+export default function DesignCard({ group, onDelete, onEdit, onItemPress, isAdmin, onDeleteGroup }) {
   const [expanded, setExpanded] = useState(true);
 
   const recordsTotalQty = group.records.reduce((sum, r) => {
@@ -177,11 +177,37 @@ export default function DesignCard({ group, onDelete, onEdit, onItemPress }) {
             </Text>
           </View>
         </View>
-        <MaterialCommunityIcons
-          name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={22}
-          color={GOLD}
-        />
+        <View style={styles.headerRight}>
+          {isAdmin && (
+            <TouchableOpacity
+              style={styles.groupDeleteBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              activeOpacity={0.7}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                Alert.alert(
+                  'Delete Stock',
+                  'Are you sure you want to delete this stock? This action cannot be undone.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Delete',
+                      style: 'destructive',
+                      onPress: () => onDeleteGroup(group.designName),
+                    },
+                  ]
+                );
+              }}
+            >
+              <MaterialCommunityIcons name="trash-can-outline" size={18} color="#FF6B5E" />
+            </TouchableOpacity>
+          )}
+          <MaterialCommunityIcons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={22}
+            color={GOLD}
+          />
+        </View>
       </TouchableOpacity>
 
       {/* Items */}
@@ -270,6 +296,14 @@ const styles = StyleSheet.create({
   },
   headerTextBlock: {
     flex: 1,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  groupDeleteBtn: {
+    padding: 2,
   },
   designName: {
     fontSize: 14,
