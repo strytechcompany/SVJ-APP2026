@@ -1,6 +1,7 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { settingsAPI } from './api';
+import { safeNumber } from '../utils/safeNumber';
 
 // ─── Module-level singleton lock ──────────────────────────────────────────────
 // expo-print's native layer only allows ONE print/file operation at a time.
@@ -20,8 +21,8 @@ const escapeHtml = (value) => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
 
-const formatMoney = (value) => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-const formatMoneyInt = (value) => Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const formatMoney = (value) => safeNumber(Number(value)).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const formatMoneyInt = (value) => safeNumber(Number(value)).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 const formatGram = (value) => `${Number(value || 0).toFixed(3)}g`;
 // 4 decimal places; returns '' when value is zero (no trailing zeros shown)
 const fmt4 = (v) => { const n = Number(v || 0); return n === 0 ? '' : n.toFixed(4); };
@@ -321,6 +322,7 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
     advanceBalanceAfter,
     convertedGram,
     gstDetails,
+    status,
   } = transaction;
 
   const shopName = shopProfile?.shopName || 'Sri Vaishnavi Jewellers';
@@ -336,9 +338,12 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
   const sgst = gstDetails?.sgstAmount || 0;
   const collectedAmount = paymentMode === 'Gold' ? goldConvertedAmount : (paymentDetails?.amount || 0);
   const balanceDue = Math.max(0, finalAmount - collectedAmount);
-  // B2D is also a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance
+  // B2D is a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance.
+  // Wastage uses a cash model (WW × Rate) and is handled separately below.
   const isB2DBill = transactionType === 'B2D';
-  const isGramOnly = isWastage || isB2DBill;
+  const isGramOnly = isB2DBill;
+  // Plus: every non-Wastage B2C bill — a Pure-weight (gram) ledger, no cash/GST involved.
+  const isPlusBill = transactionType === 'B2C' && !isWastage;
   const gramOutstanding = Math.abs(balanceAmount ?? ((issueTotalPurity || 0) - (receiptTotalPurity || 0)));
 
   const commonBillNo = transaction.commonBillNo || '';
@@ -349,11 +354,10 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
   const issueRows = isWastage
     ? issueItems.map((item) => `
         <tr>
-          <td class="wi-item">${escapeHtml(item.itemName || '-')}</td>
-          <td class="wi-wt">${fmt4(item.weight) || '-'}</td>
-          <td class="wi-wst">${fmt4(item.wastage) || '-'}</td>
-          <td class="wi-touch">${fmtPurity(item.actualTouch) || '-'}</td>
-          <td class="wi-purity">${fmtPurity(item.purity) || '-'}</td>
+          <td class="wc-item">${escapeHtml(item.itemName || '-')}</td>
+          <td class="wc-ww">${fmt4(item.value1) || '-'}</td>
+          <td class="wc-rate">${formatMoneyInt(item.rate) || '-'}</td>
+          <td class="wc-cash">${formatMoneyInt(item.amount) || '-'}</td>
         </tr>
       `).join('')
     : isB2DBill
@@ -369,19 +373,18 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
         <tr>
           <td class="item-col">${escapeHtml(item.itemName || '-')}</td>
           <td class="weight-col">${fmt4(item.weight) || '-'}</td>
-          <td class="purity-col">${fmtPurity(item.purity) || '-'}</td>
-          <td class="amount-col">${formatMoneyInt(item.amount) || '-'}</td>
+          <td class="purity-col">${fmtPurity(item.sriBill) || '-'}</td>
+          <td class="amount-col">${fmt4(safeNumber(item.purity)) || '-'}</td>
         </tr>
       `).join('');
 
   const receiptRows = isWastage
     ? receiptItems.map((item) => `
         <tr>
-          <td class="wi-item">${escapeHtml(item.receiptType || '-')}</td>
-          <td class="wi-wt">${fmt4(item.weight) || '-'}</td>
-          <td class="wi-wst">${fmt4(item.less) || '-'}</td>
-          <td class="wi-touch">${fmtPurity(item.takenTouch) || '-'}</td>
-          <td class="wi-purity">${fmtPurity(item.purity) || '-'}</td>
+          <td class="wc-item">${escapeHtml(item.receiptType || '-')}</td>
+          <td class="wc-ww">${fmt4(item.weight) || '-'}</td>
+          <td class="wc-rate">${formatMoneyInt(item.rate) || '-'}</td>
+          <td class="wc-cash">${formatMoneyInt(item.amount) || '-'}</td>
         </tr>
       `).join('')
     : isB2DBill
@@ -397,8 +400,8 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
         <tr>
           <td class="item-col">${escapeHtml(item.receiptType || '-')}</td>
           <td class="weight-col">${fmt4(item.weight) || '-'}</td>
-          <td class="purity-col">${fmtPurity(item.purity) || '-'}</td>
-          <td class="amount-col">${formatMoneyInt(item.amount) || '-'}</td>
+          <td class="purity-col">${fmtPurity(item.actualTouch) || '-'}</td>
+          <td class="amount-col">${fmt4(safeNumber(item.purity)) || '-'}</td>
         </tr>
       `).join('');
 
@@ -453,6 +456,10 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
           .wi-wst { width: 18%; }
           .wi-touch { width: 16%; }
           .wi-purity { width: 20%; text-align: right; }
+          .wc-item { width: 34%; }
+          .wc-ww { width: 22%; }
+          .wc-rate { width: 20%; }
+          .wc-cash { width: 24%; text-align: right; }
           .bd-item { width: 34%; }
           .bd-wt { width: 22%; }
           .bd-touch { width: 20%; }
@@ -475,8 +482,8 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
           <div class="section-title">CUSTOMER DETAILS</div>
           ${renderRow('Customer Name:', escapeHtml(customerInfo.customerName || 'N/A'))}
           ${renderRow('Phone:', escapeHtml(customerInfo.phoneNumber || 'N/A'))}
-          ${Number(oldBalanceBefore) ? renderRow('Old Balance:', formatGram(oldBalanceBefore)) : ''}
-          ${Number(advanceBalanceBefore) ? renderRow('Advance:', formatGram(advanceBalanceBefore)) : ''}
+          ${Number(oldBalanceBefore) ? renderRow('Old Balance:', isWastage ? `₹${formatMoney(safeNumber(oldBalanceBefore))}` : formatGram(oldBalanceBefore)) : ''}
+          ${!isWastage && Number(advanceBalanceBefore) ? renderRow('Advance:', formatGram(advanceBalanceBefore)) : ''}
 
           ${issueItems.length > 0 ? `
             <hr class="divider" />
@@ -485,11 +492,10 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
               <thead>
                 <tr>
                   ${isWastage ? `
-                    <th class="wi-item">Item</th>
-                    <th class="wi-wt">Wt(g)</th>
-                    <th class="wi-wst">Wst(g)</th>
-                    <th class="wi-touch">A.Tch%</th>
-                    <th class="wi-purity">Purity</th>
+                    <th class="wc-item">Item</th>
+                    <th class="wc-ww">WW(g)</th>
+                    <th class="wc-rate">Rate(\u20B9)</th>
+                    <th class="wc-cash">Cash(\u20B9)</th>
                   ` : isB2DBill ? `
                     <th class="bd-item">Item</th>
                     <th class="bd-wt">Wt(g)</th>
@@ -498,8 +504,8 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
                   ` : `
                     <th class="item-col">Item</th>
                     <th class="weight-col">Wt(g)</th>
-                    <th class="purity-col">Purity</th>
-                    <th class="amount-col">Amt(\u20B9)</th>
+                    <th class="purity-col">SRI Bill</th>
+                    <th class="amount-col">Pure</th>
                   `}
                 </tr>
               </thead>
@@ -514,11 +520,10 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
               <thead>
                 <tr>
                   ${isWastage ? `
-                    <th class="wi-item">Type</th>
-                    <th class="wi-wt">Wt(g)</th>
-                    <th class="wi-wst">Less(g)</th>
-                    <th class="wi-touch">T.Tch%</th>
-                    <th class="wi-purity">Purity</th>
+                    <th class="wc-item">Type</th>
+                    <th class="wc-ww">Wt(g)</th>
+                    <th class="wc-rate">Rate(₹)</th>
+                    <th class="wc-cash">Cash(₹)</th>
                   ` : isB2DBill ? `
                     <th class="bd-item">Item</th>
                     <th class="bd-wt">Wt(g)</th>
@@ -527,8 +532,8 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
                   ` : `
                     <th class="item-col">Item</th>
                     <th class="weight-col">Wt(g)</th>
-                    <th class="purity-col">Purity</th>
-                    <th class="amount-col">Amt(\u20B9)</th>
+                    <th class="purity-col">Buying %</th>
+                    <th class="amount-col">Pure</th>
                   `}
                 </tr>
               </thead>
@@ -536,7 +541,7 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
             </table>
           ` : ''}
 
-          ${!isGramOnly ? `
+          ${!isGramOnly && !isPlusBill ? `
             <hr class="divider" />
             <div class="section-title">PAYMENT DETAILS</div>
             ${renderRow('Payment Mode', escapeHtml(paymentMode || 'N/A'))}
@@ -547,7 +552,26 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
 
           <hr class="divider" />
           <div class="section-title">SUMMARY</div>
-          ${isGramOnly ? `
+          ${isWastage ? `
+            ${renderRow('Issue Cash', `₹${formatMoney(issueTotalAmount)}`)}
+            ${renderRow('Receipt Cash', `- ₹${formatMoney(receiptTotalAmount)}`)}
+            ${renderRow('Final Cash', `₹${formatMoney(finalAmount)}`)}
+            ${renderRow('Payment Type', escapeHtml(paymentMode || 'N/A'))}
+            ${status ? `
+              <hr class="divider" />
+              ${renderRow('Payment Status', status === 'PAID' ? 'Paid' : 'Balance')}
+              ${renderRow('Current Balance', `₹${formatMoney(safeNumber(oldBalanceAfter))}`)}
+            ` : ''}
+          ` : isPlusBill ? `
+            ${renderRow('Total Issue Pure', formatGram(safeNumber(issueTotalPurity)))}
+            ${renderRow('Total Receipt Pure', `- ${formatGram(safeNumber(receiptTotalPurity))}`)}
+            ${renderRow('Difference', formatGram(Math.abs(safeNumber(issueTotalPurity) - safeNumber(receiptTotalPurity))))}
+            <hr class="divider" />
+            ${renderRow('Old Balance (Before)', formatGram(oldBalanceBefore))}
+            ${renderRow('Advance Balance (Before)', formatGram(advanceBalanceBefore))}
+            ${renderRow('Old Balance (After)', formatGram(oldBalanceAfter))}
+            ${renderRow('Advance Balance (After)', formatGram(advanceBalanceAfter))}
+          ` : isGramOnly ? `
             ${renderRow('Issue Gram', formatGram(issueTotalPurity))}
             ${renderRow('Receipt Gram', `- ${formatGram(receiptTotalPurity)}`)}
             ${renderRow('Outstanding Balance', formatGram(gramOutstanding))}

@@ -13,21 +13,36 @@ const DARK_BROWN = '#4B2E05';
 const HEADER_BG = '#4B2E05';
 const BG = '#F8F4E8';
 
-export default function IssueLineStockScreen({ navigation }) {
+export default function IssueLineStockScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const topPad = insets.top || (Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 44);
+  const { editTransactionId, prefilledData } = route?.params || {};
+  const isEditMode = !!editTransactionId;
 
   // Form State
   const [customers, setCustomers] = useState([]);
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [customerSearch, setCustomerSearch] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState(() => prefilledData?.customerId || null);
+  const [customerSearch, setCustomerSearch] = useState(() => prefilledData?.customerId?.customerName || '');
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
-  const [expectedReturnDate, setExpectedReturnDate] = useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)); // Default 7 days
+  const [expectedReturnDate, setExpectedReturnDate] = useState(() =>
+    prefilledData?.expectedReturnDate ? new Date(prefilledData.expectedReturnDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+  ); // Default 7 days
   const [showDatePicker, setShowDatePicker] = useState(false);
-  
+
   const [barcodeSearch, setBarcodeSearch] = useState('');
-  const [issuedProducts, setIssuedProducts] = useState([]);
+  const [issuedProducts, setIssuedProducts] = useState(() =>
+    (prefilledData?.issuedProducts || []).map(p => ({
+      stockId: typeof p.stockId === 'object' ? p.stockId?._id : p.stockId,
+      itemNumber: p.itemNumber || '',
+      barcode: p.barcode || '',
+      itemName: p.itemName || '',
+      category: p.category || '',
+      purity: p.purity || '',
+      count: p.count || 1,
+      weight: p.weight || 0,
+    }))
+  );
   const [stockSearchResults, setStockSearchResults] = useState([]);
   const [isSearchingStock, setIsSearchingStock] = useState(false);
   const searchTimeout = useRef(null);
@@ -60,7 +75,7 @@ export default function IssueLineStockScreen({ navigation }) {
     return () => clearTimeout(searchTimeout.current);
   }, [barcodeSearch]);
   
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(() => prefilledData?.description || '');
   const [saving, setSaving] = useState(false);
 
   const normalizeScanValue = (value) => {
@@ -226,22 +241,35 @@ export default function IssueLineStockScreen({ navigation }) {
 
     setSaving(true);
     try {
-      const payload = {
-        customerId: selectedCustomer._id,
-        issueDate: new Date(),
-        expectedReturnDate,
-        issuedProducts,
-        description,
-      };
+      if (isEditMode) {
+        const res = await lineStockAPI.updateTransaction(editTransactionId, {
+          expectedReturnDate,
+          issuedProducts,
+          description,
+        });
+        if (res.data.success) {
+          Alert.alert('Success', 'Line Stock Transaction Updated Successfully', [
+            { text: 'OK', onPress: () => navigation.goBack() }
+          ]);
+        }
+      } else {
+        const payload = {
+          customerId: selectedCustomer._id,
+          issueDate: new Date(),
+          expectedReturnDate,
+          issuedProducts,
+          description,
+        };
 
-      const res = await lineStockAPI.issueStock(payload);
-      if (res.data.success) {
-        Alert.alert('Success', 'Line Stock Issued Successfully', [
-          { text: 'View Bill', onPress: () => navigation.navigate('LineStockBillPreview', { transactionId: res.data.data._id }) }
-        ]);
+        const res = await lineStockAPI.issueStock(payload);
+        if (res.data.success) {
+          Alert.alert('Success', 'Line Stock Issued Successfully', [
+            { text: 'View Bill', onPress: () => navigation.navigate('LineStockBillPreview', { transactionId: res.data.data._id }) }
+          ]);
+        }
       }
     } catch (e) {
-      Alert.alert('Error', e.response?.data?.message || 'Failed to issue stock.');
+      Alert.alert('Error', e.response?.data?.message || `Failed to ${isEditMode ? 'update' : 'issue'} stock.`);
     } finally {
       setSaving(false);
     }
@@ -257,7 +285,7 @@ export default function IssueLineStockScreen({ navigation }) {
           <MaterialCommunityIcons name="arrow-left" size={24} color={GOLD} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Issue Line Stock</Text>
+          <Text style={styles.headerTitle}>{isEditMode ? 'Edit Line Stock' : 'Issue Line Stock'}</Text>
         </View>
         <View style={{ width: 40 }} />
       </View>
@@ -273,17 +301,19 @@ export default function IssueLineStockScreen({ navigation }) {
                 <Text style={styles.selectedCustomerName}>{selectedCustomer.customerName}</Text>
                 <Text style={styles.selectedCustomerSub}>{selectedCustomer.phoneNumber}{selectedCustomer.customerCode ? `  |  ${selectedCustomer.customerCode}` : ''}</Text>
               </View>
-              <TouchableOpacity
-                style={styles.changeCustomerBtn}
-                onPress={() => {
-                  setSelectedCustomer(null);
-                  setCustomerSearch('');
-                  setShowCustomerDropdown(false);
-                }}
-              >
-                <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
-                <Text style={styles.changeCustomerBtnText}>Change</Text>
-              </TouchableOpacity>
+              {!isEditMode && (
+                <TouchableOpacity
+                  style={styles.changeCustomerBtn}
+                  onPress={() => {
+                    setSelectedCustomer(null);
+                    setCustomerSearch('');
+                    setShowCustomerDropdown(false);
+                  }}
+                >
+                  <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
+                  <Text style={styles.changeCustomerBtnText}>Change</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : (
             <View>
@@ -468,7 +498,9 @@ export default function IssueLineStockScreen({ navigation }) {
           onPress={handleIssue}
         >
           {saving ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="check" size={24} color="#FFF" />}
-          <Text style={styles.submitBtnText}>{saving ? 'Issuing...' : 'Issue Line Stock'}</Text>
+          <Text style={styles.submitBtnText}>
+            {saving ? (isEditMode ? 'Updating...' : 'Issuing...') : (isEditMode ? 'Update Line Stock' : 'Issue Line Stock')}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </View>

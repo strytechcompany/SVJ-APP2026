@@ -61,6 +61,13 @@ const LineStockSettlementSchema = new mongoose.Schema(
       enum: ['SETTLED', 'ACTIVE'],
       default: 'SETTLED',
     },
+    // A draft holds Sold Products saved incrementally, before the settlement is
+    // finalized (payments entered, stock/balance/ledger effects applied). Only
+    // one draft may exist per lineStockTransactionId at a time.
+    isDraft: {
+      type: Boolean,
+      default: false,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

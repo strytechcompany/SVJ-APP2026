@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   FlatList,
   Platform,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -30,7 +31,9 @@ export default function LineStockDashboardScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('All'); // All, ACTIVE, OVERDUE, SETTLED
   const [search, setSearch] = useState('');
-  
+  const [deletingId, setDeletingId] = useState(null);
+  const [clearingAll, setClearingAll] = useState(false);
+
   const searchTimeout = useRef(null);
 
   const fetchDashboardData = async (status = 'All', searchQuery = '') => {
@@ -63,6 +66,79 @@ export default function LineStockDashboardScreen({ navigation }) {
     searchTimeout.current = setTimeout(() => {
       fetchDashboardData(filter, text);
     }, 400);
+  };
+
+  const handleEdit = (item) => {
+    navigation.navigate('IssueLineStock', { editTransactionId: item._id, prefilledData: item });
+  };
+
+  const handleDelete = (item) => {
+    Alert.alert(
+      'Delete Customer',
+      'Are you sure you want to delete this customer?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingId(item._id);
+            try {
+              const res = await lineStockAPI.deleteTransaction(item._id);
+              if (res.data.success) {
+                Alert.alert('Success', 'Line Stock Transaction Deleted Successfully');
+                fetchDashboardData(filter, search);
+              }
+            } catch (e) {
+              Alert.alert('Error', e.response?.data?.message || 'Failed to delete transaction.');
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClearAll = () => {
+    Alert.alert(
+      'Clear All Transactions',
+      'This will permanently delete ALL Line Stock transactions (including settled ones), restore stock quantities, and reset every Line Stocker customer\'s balance to zero. This cannot be undone. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Are you absolutely sure?',
+              'This is your last chance to cancel. All Line Stock history will be permanently erased.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Clear All',
+                  style: 'destructive',
+                  onPress: async () => {
+                    setClearingAll(true);
+                    try {
+                      const res = await lineStockAPI.clearAllTransactions();
+                      if (res.data.success) {
+                        Alert.alert('Success', res.data.message || 'All Line Stock transactions cleared successfully.');
+                        fetchDashboardData(filter, search);
+                      }
+                    } catch (e) {
+                      Alert.alert('Error', e.response?.data?.message || 'Failed to clear transactions.');
+                    } finally {
+                      setClearingAll(false);
+                    }
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
   };
 
   const renderTransactionCard = ({ item }) => {
@@ -99,6 +175,26 @@ export default function LineStockDashboardScreen({ navigation }) {
               <Text style={styles.value}>{item.totalItems} ({Number(item.totalGram).toFixed(3)}g)</Text>
             </View>
           </View>
+          <View style={styles.rowActions}>
+            <TouchableOpacity style={styles.editBtn} onPress={() => handleEdit(item)}>
+              <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
+              <Text style={styles.editBtnText}>Edit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.deleteBtn}
+              onPress={() => handleDelete(item)}
+              disabled={deletingId === item._id}
+            >
+              {deletingId === item._id ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <>
+                  <MaterialCommunityIcons name="trash-can-outline" size={14} color="#FFF" />
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
         {item.status !== 'SETTLED' && (
           <TouchableOpacity 
@@ -125,7 +221,18 @@ export default function LineStockDashboardScreen({ navigation }) {
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Line Stocker</Text>
         </View>
-        <TouchableOpacity 
+        <TouchableOpacity
+          style={styles.clearAllBtn}
+          onPress={handleClearAll}
+          disabled={clearingAll}
+        >
+          {clearingAll ? (
+            <ActivityIndicator size="small" color="#E74C3C" />
+          ) : (
+            <MaterialCommunityIcons name="delete-sweep-outline" size={20} color="#E74C3C" />
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
           style={styles.createCustomerBtn}
           onPress={() => navigation.navigate('CreateCustomer', { defaultType: 'LINE STOCKER' })}
         >
@@ -223,6 +330,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  clearAllBtn: {
+    backgroundColor: '#FFFFFF',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
   summaryContainer: { padding: 16, gap: 12 },
   summaryRow: { flexDirection: 'row', gap: 12 },
   summaryCard: {
@@ -266,6 +382,11 @@ const styles = StyleSheet.create({
   detailsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 },
   label: { fontSize: 11, color: '#8A6B3C', fontWeight: '600', marginBottom: 4 },
   value: { fontSize: 13, color: DARK_BROWN, fontWeight: '700' },
+  rowActions: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, backgroundColor: '#F0E4CC' },
+  editBtnText: { fontSize: 12, fontWeight: '700', color: DARK_BROWN },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, backgroundColor: '#E74C3C' },
+  deleteBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
   settleBtn: {
     flexDirection: 'row',
     alignItems: 'center',

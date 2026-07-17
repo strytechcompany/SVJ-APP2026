@@ -188,8 +188,14 @@ export const lineStockAPI = {
   getTransactions: (params) => api.get('/linestock', { params }),
   getTransactionById: (id) => api.get(`/linestock/${id}`),
   issueStock: (data) => api.post('/linestock/issue', data),
+  updateTransaction: (id, data) => api.put(`/linestock/${id}`, data),
+  deleteTransaction: (id) => api.delete(`/linestock/${id}`),
+  clearAllTransactions: () => api.delete('/linestock/clear-all'),
   settleStock: (data) => api.post('/linestock/settle', data),
   getSettlementById: (id) => api.get(`/linestock/settlement/${id}`),
+  saveSoldItem: (data) => api.post('/linestock/settlement/sold-item', data),
+  getDraftSettlement: (lineStockTransactionId) => api.get(`/linestock/settlement/draft/${lineStockTransactionId}`),
+  deleteSoldItem: (lineStockTransactionId, stockId) => api.delete(`/linestock/settlement/draft/${lineStockTransactionId}/sold-item/${stockId}`),
 };
 
 export const orderAPI = {

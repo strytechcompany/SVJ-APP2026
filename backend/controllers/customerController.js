@@ -267,10 +267,19 @@ exports.getByType = async (req, res) => {
     const total = await Customer.countDocuments(query);
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const customers = await Customer.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    // Sort by most recent activity (last transaction date), falling back to
+    // creation date for customers who haven't transacted yet. This screen has
+    // no customerCategory filter — B2C's Plus and Wastage customers are always
+    // queried together — but sorting by createdAt alone let whichever category
+    // had more recently-created customer records crowd the other out of this
+    // limited "recent" page. Sorting by actual activity fixes that.
+    const customers = await Customer.aggregate([
+      { $match: query },
+      { $addFields: { sortActivity: { $ifNull: ['$lastTransactionDate', '$createdAt'] } } },
+      { $sort: { sortActivity: -1 } },
+      { $skip: skip },
+      { $limit: parseInt(limit) },
+    ]);
 
     res.json({
       success: true,

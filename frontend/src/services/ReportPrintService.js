@@ -2,6 +2,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import { Alert } from 'react-native';
+import { safeNumber } from '../utils/safeNumber';
 
 let _busy = false;
 const acquire = () => { if (_busy) return false; _busy = true; return true; };
@@ -87,22 +88,22 @@ const generateHTML = (data) => {
         <div class="section">
           <div class="section-title">2. Plus Summary</div>
           <table>
-            <tr><th>Plus (%)</th><th class="center">Weight</th><th class="right">Profit</th></tr>
+            <tr><th>B Value</th><th class="center">S Value</th><th class="right">Profit</th></tr>
             ${plusSummary.map(p => `<tr>
-              <td>${p.plus}%</td><td class="center">${p.totalWeight.toFixed(3)}g</td><td class="right green">${p.profit.toFixed(3)}g</td>
+              <td>${safeNumber(p.bValue).toFixed(3)}g</td><td class="center">${safeNumber(p.sValue).toFixed(3)}g</td><td class="right green">${safeNumber(p.profit).toFixed(3)}g</td>
             </tr>`).join('')}
-            <tr class="total-row"><td colspan="2">Total Profit</td><td class="right">${calculations.customerSalesProfit.toFixed(3)}g</td></tr>
+            <tr class="total-row"><td class="right">${safeNumber(calculations.plusSummaryBValue).toFixed(3)}g</td><td class="right">${safeNumber(calculations.plusSummarySValue).toFixed(3)}g</td><td class="right">${safeNumber(calculations.plusSummaryProfit).toFixed(3)}g</td></tr>
           </table>
         </div>
 
         <div class="section">
           <div class="section-title">3. Wastage Summary</div>
           <table>
-            <tr><th>Wastage</th><th class="center">Weight</th><th class="right">Profit</th></tr>
+            <tr><th>B Value</th><th class="center">S Value</th><th class="right">Profit</th></tr>
             ${wastageSummary.map(w => `<tr>
-              <td>${Number(w.wastage || 0).toFixed(3)}g</td><td class="center">${w.totalWeight.toFixed(3)}g</td><td class="right green">${w.profit.toFixed(3)}g</td>
+              <td>₹${safeNumber(w.bValue).toFixed(2)}</td><td class="center">₹${safeNumber(w.sValue).toFixed(2)}</td><td class="right green">₹${safeNumber(w.profit).toFixed(2)}</td>
             </tr>`).join('')}
-            <tr class="total-row"><td colspan="2">Total Profit</td><td class="right">${calculations.wastageSummaryProfit.toFixed(3)}g</td></tr>
+            <tr class="total-row"><td class="right">₹${safeNumber(calculations.wastageSummaryBValue).toFixed(2)}</td><td class="right">₹${safeNumber(calculations.wastageSummarySValue).toFixed(2)}</td><td class="right">₹${safeNumber(calculations.wastageSummaryProfit).toFixed(2)}</td></tr>
           </table>
         </div>
 

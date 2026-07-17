@@ -7,6 +7,7 @@ import {
   Alert,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { resolveDisplayBalance } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -25,6 +26,7 @@ function formatDate(dateStr) {
 
 export default function CustomerCard({ customer, onView, onEdit, onDelete }) {
   const typeStyle = TYPE_COLORS[customer.customerType] || TYPE_COLORS.B2C;
+  const { label: balanceLabel, value: balanceValue } = resolveDisplayBalance(customer.oldBalance, customer.advance);
 
   const confirmDelete = () => {
     Alert.alert(
@@ -77,14 +79,9 @@ export default function CustomerCard({ customer, onView, onEdit, onDelete }) {
       {/* Balance Row */}
       <View style={styles.balanceRow}>
         <View style={styles.balanceItem}>
-          <Text style={styles.balanceLabel}>Old Balance</Text>
-          <Text style={styles.balanceValue}>₹ {Number(customer.oldBalance).toFixed(2)}</Text>
-        </View>
-        <View style={styles.balanceDivider} />
-        <View style={styles.balanceItem}>
-          <Text style={styles.balanceLabel}>Advance</Text>
-          <Text style={[styles.balanceValue, { color: '#2E7D32' }]}>
-            ₹ {Number(customer.advance).toFixed(2)}
+          <Text style={styles.balanceLabel}>{balanceLabel}</Text>
+          <Text style={[styles.balanceValue, balanceLabel === 'Advance' && { color: '#2E7D32' }]}>
+            ₹ {balanceValue.toFixed(2)}
           </Text>
         </View>
         <View style={styles.balanceDivider} />

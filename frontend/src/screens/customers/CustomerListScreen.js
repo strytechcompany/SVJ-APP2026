@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useCustomer } from '../../context/CustomerContext';
 import CustomerCard from '../../components/customers/CustomerCard';
@@ -62,9 +63,18 @@ export default function CustomerListScreen({ navigation }) {
     }
   }, []);
 
-  useEffect(() => {
-    fetchCustomers({ search: '', type: 'All' }, true);
-  }, []);
+  // Refetch every time this screen regains focus, so a customer's balance
+  // updated by any B2C/B2D/Line Stock transaction is always shown fresh from
+  // MongoDB — never a stale value left over from a previous visit.
+  useFocusEffect(
+    useCallback(() => {
+      if (typeFilter === 'CHIT FUND') {
+        fetchChitCustomersData(searchQuery);
+      } else {
+        fetchCustomers({ search: searchQuery, type: typeFilter }, true);
+      }
+    }, [typeFilter, searchQuery, fetchCustomers, fetchChitCustomersData])
+  );
 
   const handleSearch = useCallback((text) => {
     setSearchQuery(text);

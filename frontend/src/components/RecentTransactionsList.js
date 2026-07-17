@@ -1,20 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { transactionAPI } from '../services/api';
+import { resolveDisplayBalance } from '../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
+
+// PLUS = any non-Wastage B2C bill; other types show their own transactionType.
+const getTransactionTypeLabel = (item) => {
+  if (item.transactionType === 'B2C') return item.isWastage ? 'WASTAGE' : 'PLUS';
+  return item.transactionType;
+};
 
 export default function RecentTransactionsList() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigation = useNavigation();
 
-  useEffect(() => {
-    fetchRecent();
-  }, []);
+  // Refetch every time this screen regains focus so the list (and each
+  // customer's balance) always reflects the latest saved bill.
+  useFocusEffect(
+    useCallback(() => {
+      fetchRecent();
+    }, [])
+  );
 
   const fetchRecent = async () => {
     try {
@@ -49,26 +60,52 @@ export default function RecentTransactionsList() {
       {transactions.length === 0 ? (
         <Text style={styles.empty}>No recent transactions.</Text>
       ) : (
-        transactions.map((item) => (
-          <TouchableOpacity 
-            key={item._id} 
-            style={styles.card}
-            activeOpacity={0.7}
-            onPress={() => navigation.navigate('BillPreviewPlaceholder', { transactionId: item._id, type: item.transactionType })}
-          >
-            <View style={styles.cardHeader}>
-              <Text style={styles.billNo}>#{item._id.slice(-6).toUpperCase()}</Text>
-              <View style={styles.typeBadge}>
-                <Text style={styles.typeText}>{item.transactionType}</Text>
+        transactions.map((item) => {
+          const { label: balanceLabel, value: balanceValue } = resolveDisplayBalance(
+            item.customerId?.oldBalance,
+            item.customerId?.advance
+          );
+          const isPaid = item.status === 'PAID';
+          return (
+            <TouchableOpacity
+              key={item._id}
+              style={styles.card}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('BillPreviewPlaceholder', { transactionId: item._id, type: item.transactionType })}
+            >
+              <View style={styles.cardHeader}>
+                <Text style={styles.billNo}>{item.commonBillNo || `#${item._id.slice(-6).toUpperCase()}`}</Text>
+                <View style={styles.typeBadge}>
+                  <Text style={styles.typeText}>{getTransactionTypeLabel(item)}</Text>
+                </View>
               </View>
-            </View>
-            <Text style={styles.customerName}>{item.customerId?.customerName || 'Unknown Customer'}</Text>
-            <View style={styles.row}>
-              <Text style={styles.date}>{new Date(item.createdAt).toLocaleDateString('en-GB')}</Text>
-              <Text style={styles.amt}>₹{item.finalAmount?.toLocaleString('en-IN')}</Text>
-            </View>
-          </TouchableOpacity>
-        ))
+              <Text style={styles.customerName}>{item.customerId?.customerName || 'Unknown Customer'}</Text>
+              <View style={styles.row}>
+                <Text style={styles.date}>{new Date(item.createdAt).toLocaleDateString('en-GB')}</Text>
+                <Text style={styles.date}>{new Date(item.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</Text>
+              </View>
+              {item.isWastage ? (
+                <>
+                  <View style={styles.row}>
+                    <Text style={styles.date}>Final Cash: ₹{(item.finalAmount || 0).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                    <Text style={[styles.amt, { color: isPaid ? '#2E7D32' : '#D32F2F' }]}>{isPaid ? 'Paid' : 'Balance'}</Text>
+                  </View>
+                  <View style={styles.row}>
+                    <Text style={[styles.amt, { color: balanceLabel === 'Advance' ? '#2E7D32' : (balanceValue > 0 ? '#D32F2F' : DARK_BROWN) }]}>
+                      {balanceLabel}: ₹{balanceValue.toLocaleString('en-IN', {maximumFractionDigits:2})}
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.row}>
+                  <Text style={[styles.amt, { color: balanceLabel === 'Advance' ? '#2E7D32' : (balanceValue > 0 ? '#D32F2F' : DARK_BROWN) }]}>
+                    {balanceLabel}: {balanceValue.toFixed(3)}g
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })
       )}
     </View>
   );

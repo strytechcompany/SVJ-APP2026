@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,11 @@ import {
   Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useCustomer } from '../../context/CustomerContext';
 import { useAuth } from '../../context/AuthContext';
+import { resolveDisplayBalance } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -71,7 +73,13 @@ export default function CustomerDetailScreen({ navigation, route }) {
   const [editSaving, setEditSaving] = useState(false);
   const [deletingBillId, setDeletingBillId] = useState(null);
 
-  useEffect(() => { loadCustomer(); }, [customerId]);
+  // Refetch on every focus (covers initial mount too) so a balance updated by
+  // a B2C/B2D/Line Stock transaction elsewhere is always shown fresh from MongoDB.
+  useFocusEffect(
+    useCallback(() => {
+      loadCustomer();
+    }, [customerId])
+  );
 
   const loadCustomer = async () => {
     try {
@@ -267,6 +275,7 @@ export default function CustomerDetailScreen({ navigation, route }) {
   }
 
   const typeStyle = TYPE_COLORS[customer.customerType] || TYPE_COLORS.B2C;
+  const financialBalance = resolveDisplayBalance(customer.oldBalance, customer.advance);
 
   return (
     <View style={styles.container}>
@@ -335,13 +344,10 @@ export default function CustomerDetailScreen({ navigation, route }) {
           <Text style={styles.cardTitle}>Financial</Text>
           <View style={styles.balanceRow}>
             <View style={styles.balBox}>
-              <Text style={styles.balLabel}>Old Balance</Text>
-              <Text style={styles.balValue}>₹ {Number(customer.oldBalance).toFixed(2)}</Text>
-            </View>
-            <View style={styles.balDivider} />
-            <View style={styles.balBox}>
-              <Text style={styles.balLabel}>Advance</Text>
-              <Text style={[styles.balValue, { color: '#2E7D32' }]}>₹ {Number(customer.advance).toFixed(2)}</Text>
+              <Text style={styles.balLabel}>{financialBalance.label}</Text>
+              <Text style={[styles.balValue, financialBalance.label === 'Advance' && { color: '#2E7D32' }]}>
+                ₹ {financialBalance.value.toFixed(2)}
+              </Text>
             </View>
           </View>
         </View>
@@ -418,13 +424,10 @@ export default function CustomerDetailScreen({ navigation, route }) {
               <View style={styles.sep}/>
               <View style={styles.balanceRow}>
                 <View style={styles.balBox}>
-                  <Text style={styles.balLabel}>Old Balance</Text>
-                  <Text style={styles.balValue}>₹ {Number(customer.oldBalance).toFixed(2)}</Text>
-                </View>
-                <View style={styles.balDivider} />
-                <View style={styles.balBox}>
-                  <Text style={styles.balLabel}>Advance</Text>
-                  <Text style={[styles.balValue, { color: '#2E7D32' }]}>₹ {Number(customer.advance).toFixed(2)}</Text>
+                  <Text style={styles.balLabel}>{financialBalance.label}</Text>
+                  <Text style={[styles.balValue, financialBalance.label === 'Advance' && { color: '#2E7D32' }]}>
+                    ₹ {financialBalance.value.toFixed(2)}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -532,7 +535,18 @@ export default function CustomerDetailScreen({ navigation, route }) {
                           <View style={styles.billActionRow}>
                             <TouchableOpacity
                               style={styles.billEditBtn}
-                              onPress={() => handleEditBill(item)}
+                              onPress={() => {
+                                if (item.isWastage) {
+                                  navigation.navigate(`${item.transactionType}Calculation`, {
+                                    type: item.transactionType,
+                                    customerId: customer._id,
+                                    editTransactionId: item._id,
+                                    prefilledData: item,
+                                  });
+                                } else {
+                                  handleEditBill(item);
+                                }
+                              }}
                             >
                               <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
                               <Text style={styles.billEditBtnText}>Edit</Text>
@@ -801,7 +815,6 @@ const styles = StyleSheet.create({
   balBox: { flex: 1, alignItems: 'center' },
   balLabel: { fontSize: 10, color: '#A08850', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
   balValue: { fontSize: 18, fontWeight: '800', color: DARK_BROWN },
-  balDivider: { width: 1, backgroundColor: '#E8D8B8' },
 
   remarksText: { fontSize: 14, color: DARK_BROWN, lineHeight: 22, fontWeight: '500' },
 

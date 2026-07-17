@@ -16,8 +16,10 @@ const IssueItemSchema = new mongoose.Schema({
   purity: Number,
   amount: Number,
   // Wastage-account fields (customerCategory === 'WASTAGE')
+  // Cash model: value1 = WW (Weight + Wastage), rate = ₹ per gram, amount = Cash (WW × rate)
   wastage: Number,
   value1: Number,
+  rate: Number,
   actualTouch: Number,
   takenTouch: Number,
   value2: Number,
@@ -35,15 +37,34 @@ const ReceiptItemSchema = new mongoose.Schema({
   amount: Number,
   // B2D receipt field: purity = weight * (sriCost / 100)
   sriCost: Number,
+  // Wastage-account field: rate = ₹ per gram, amount = Cash (weight × rate)
+  rate: Number,
 });
 
 const PaymentDetailsSchema = new mongoose.Schema({
   mode: {
     type: String,
-    enum: ['Cash', 'Online Payment', 'Card', 'Debt', 'Gold'],
   },
   subMode: String, // GPay, Debit Card, etc.
   amount: Number,
+});
+
+const WastageProfitSchema = new mongoose.Schema({
+  weight: Number,
+  buyingPercent: Number,
+  sellingPercent: Number,
+  bValue: Number,
+  sValue: Number,
+  profit: Number,
+});
+
+const PlusProfitSchema = new mongoose.Schema({
+  weight: Number,
+  buyingPercent: Number,
+  sellingPercent: Number,
+  bValue: Number,
+  sValue: Number,
+  profit: Number,
 });
 
 const GSTDetailsSchema = new mongoose.Schema({
@@ -70,6 +91,7 @@ const TransactionSchema = new mongoose.Schema(
       ref: 'Customer',
       required: true,
     },
+    commonBillNo: String,
     issueItems: [IssueItemSchema],
     receiptItems: [ReceiptItemSchema],
     paymentDetails: PaymentDetailsSchema,
@@ -86,11 +108,17 @@ const TransactionSchema = new mongoose.Schema(
     finalAmount: Number,
     balanceAmount: Number,
 
-    // Wastage-account bill: gram-based ledger, no money involved
+    // Wastage-account bill (customerCategory === 'WASTAGE'): cash-based Issue/Receipt
     isWastage: {
       type: Boolean,
       default: false,
     },
+
+    // Wastage Profit Table — internal-only, never rendered on the bill/print
+    wastageProfit: [WastageProfitSchema],
+
+    // Plus Profit Table (customerCategory !== 'WASTAGE') — internal-only, never rendered on the bill/print
+    plusProfit: [PlusProfitSchema],
 
     // For storing gold rate at the time of transaction
     goldRate: Number,
@@ -98,6 +126,11 @@ const TransactionSchema = new mongoose.Schema(
     // Advanced Payment Tracking
     description: String,
     paymentMode: String,
+    // Wastage bill payment settlement — how the Final Cash was handled at save time
+    // (distinct from paymentMode, which is the payment method used):
+    // 'COLLECT_CASH' -> fully paid now, customer balance resets to 0.
+    // 'ADD_TO_BALANCE' -> unpaid, Final Cash added to the customer's running cash balance.
+    paymentOption: String,
     goldPaymentWeight: Number,
     goldPaymentPurity: String,
     goldConvertedAmount: Number,

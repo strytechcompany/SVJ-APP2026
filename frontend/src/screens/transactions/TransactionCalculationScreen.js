@@ -8,6 +8,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { customerAPI, stockAPI, transactionAPI, settingsAPI } from '../../services/api';
 import { useDashboard } from '../../context/DashboardContext';
 import { useTransaction } from '../../context/TransactionContext';
+import { safeNumber } from '../../utils/safeNumber';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -30,8 +31,11 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
   // Wastage-category B2C customers get a stripped-down, gram-only calculation flow
   const isWastage = type === 'B2C' && customer?.customerCategory === 'WASTAGE';
-  // B2D also uses a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance added to Old Balance
-  const isGramOnly = isWastage || isB2D;
+  // Plus: every non-Wastage B2C customer — a Pure-weight (gram) ledger, no cash/GST involved.
+  const isPlus = type === 'B2C' && !isWastage;
+  // B2D uses a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance added to Old Balance.
+  // Wastage uses a cash model (WW × Rate) and falls into the money-based balance branch below.
+  const isGramOnly = isB2D;
 
   // Stock Search Dropdown
   const [stockQuery, setStockQuery] = useState('');
@@ -72,18 +76,32 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [issueItemName, setIssueItemName] = useState('');
   const [issueWeight, setIssueWeight] = useState('');
   const [issueCount, setIssueCount] = useState('1');
-  const [issueSRICost, setIssueSRICost] = useState('');
   const [issueSRIBill, setIssueSRIBill] = useState('');
-  const [issueAmountOverride, setIssueAmountOverride] = useState(''); // Allows manual amount
 
-  // Wastage Issue Section (gram-only flow)
+  // Wastage Issue Section (cash flow: WW = Weight + Wastage, Cash = WW × Rate)
   const [wIssueStockId, setWIssueStockId] = useState('');
   const [wIssueItemNo, setWIssueItemNo] = useState('');
   const [wIssueItemName, setWIssueItemName] = useState('');
   const [wIssueWeight, setWIssueWeight] = useState('');
   const [wIssueWastage, setWIssueWastage] = useState('');
-  const [wIssueActualTouch, setWIssueActualTouch] = useState('');
-  const [wIssueTakenTouch, setWIssueTakenTouch] = useState('');
+  const [wIssueRate, setWIssueRate] = useState('');
+
+  // Wastage Receipt Section (cash flow: Cash = Weight × Rate)
+  const [wReceiptType, setWReceiptType] = useState('');
+  const [wReceiptWeight, setWReceiptWeight] = useState('');
+  const [wReceiptRate, setWReceiptRate] = useState('');
+
+  // Wastage Profit Table (internal-only, never shown on the bill)
+  const [wpWeight, setWpWeight] = useState('');
+  const [wpBuying, setWpBuying] = useState('');
+  const [wpSelling, setWpSelling] = useState('');
+  const [wpEditingId, setWpEditingId] = useState(null);
+
+  // Plus Profit Table (internal-only, never shown on the bill)
+  const [ppWeight, setPpWeight] = useState('');
+  const [ppBuying, setPpBuying] = useState('');
+  const [ppSelling, setPpSelling] = useState('');
+  const [ppEditingId, setPpEditingId] = useState(null);
 
   // B2D Issue Section (gram-only flow)
   const [bdIssueStockId, setBdIssueStockId] = useState('');
@@ -97,14 +115,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [bdReceiptWeight, setBdReceiptWeight] = useState('');
   const [bdReceiptSriCost, setBdReceiptSriCost] = useState('');
 
-  // Receipt Section
+  // Receipt Section (Plus: Pure = Weight × Buying %)
   const [receiptType, setReceiptType] = useState('');
   const [receiptWeight, setReceiptWeight] = useState('');
-  const [receiptLess, setReceiptLess] = useState('');
-  const [receiptActualTouch, setReceiptActualTouch] = useState('');
-  const [receiptTakenTouch, setReceiptTakenTouch] = useState('');
-  const [receiptGoldRate, setReceiptGoldRate] = useState('');
-  const [receiptAmountManual, setReceiptAmountManual] = useState('');
+  const [receiptBuyingPercent, setReceiptBuyingPercent] = useState('');
 
   // Arrays — lazy init from prefilledData so items are available on first render
   const [issueItems, setIssueItems] = useState(() => {
@@ -120,9 +134,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       sriBill: i.sriBill || 0,
       plus: i.plus || 0,
       purity: i.purity || 0,
-      amount: i.amount || 0,
+      amount: safeNumber(i.amount),
       wastage: i.wastage || 0,
       value1: i.value1 || 0,
+      rate: safeNumber(i.rate),
       actualTouch: i.actualTouch || 0,
       takenTouch: i.takenTouch || 0,
       value2: i.value2 || 0,
@@ -140,8 +155,37 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       takenTouch: i.takenTouch || 0,
       goldRate: i.goldRate || 0,
       purity: i.purity || 0,
-      amount: i.amount || 0,
+      amount: safeNumber(i.amount),
       sriCost: i.sriCost || 0,
+      rate: safeNumber(i.rate),
+    }));
+  });
+
+  // Wastage Profit Table rows — lazy-init from prefilledData so they're available on first render
+  const [wastageProfitRows, setWastageProfitRows] = useState(() => {
+    if (!prefilledData?.wastageProfit?.length) return [];
+    return prefilledData.wastageProfit.map((r, idx) => ({
+      id: String(Date.now() + idx + 20000),
+      weight: r.weight || 0,
+      buyingPercent: r.buyingPercent || 0,
+      sellingPercent: r.sellingPercent || 0,
+      bValue: r.bValue || 0,
+      sValue: r.sValue || 0,
+      profit: r.profit || 0,
+    }));
+  });
+
+  // Plus Profit Table rows — lazy-init from prefilledData so they're available on first render
+  const [plusProfitRows, setPlusProfitRows] = useState(() => {
+    if (!prefilledData?.plusProfit?.length) return [];
+    return prefilledData.plusProfit.map((r, idx) => ({
+      id: String(Date.now() + idx + 30000),
+      weight: r.weight || 0,
+      buyingPercent: r.buyingPercent || 0,
+      sellingPercent: r.sellingPercent || 0,
+      bValue: r.bValue || 0,
+      sValue: r.sValue || 0,
+      profit: r.profit || 0,
     }));
   });
 
@@ -283,8 +327,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       setStockQuery(s.itemNumber);
       setShowStockDropdown(false);
       setWIssueWastage('');
-      setWIssueActualTouch('');
-      setWIssueTakenTouch('');
+      setWIssueRate('');
       return;
     }
     if (isB2D) {
@@ -301,11 +344,9 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     setIssueItemNo(s.itemNumber);
     setIssueItemName(s.itemName || s.designName || '');
     setIssueWeight(s.netWeight != null ? String(s.netWeight) : '0');
-    setIssueSRICost(s.buyingTouch ? String(s.buyingTouch) : '0');
     setStockQuery(s.itemNumber);
     setShowStockDropdown(false);
     setIssueSRIBill('');
-    setIssueAmountOverride('');
   };
 
   const lookupStock = async (query) => {
@@ -365,30 +406,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     await lookupStock(query);
   };
 
-  // --- Calculations for Issue ---
-  const currentIssuePlus = useMemo(() => {
-    const bill = parseFloat(issueSRIBill) || 0;
-    const cost = parseFloat(issueSRICost) || 0;
-    return bill > 0 ? (bill - cost) : 0;
-  }, [issueSRIBill, issueSRICost]);
-
-  const currentIssueProfit = useMemo(() => {
-    const w = parseFloat(issueWeight) || 0;
-    return w * (currentIssuePlus / 100);
-  }, [issueWeight, currentIssuePlus]);
-
-  const autoIssueAmount = useMemo(() => {
+  // --- Calculations for Issue (Plus: Pure = Weight × SRI Bill) ---
+  const currentIssuePure = useMemo(() => {
     const w = parseFloat(issueWeight) || 0;
     const bill = parseFloat(issueSRIBill) || 0;
-    const rate = parseFloat(globalGoldRate) || 0;
-    // Purity representation as percentage multiplier? 
-    // Wait, the user asked: "Amount = Weight × SRI Bill × Gold Rate"
-    // Usually SRI Bill is a percentage (e.g. 91.6%). So it should be / 100.
-    return w * (bill / 100) * rate;
-  }, [issueWeight, issueSRIBill, globalGoldRate]);
-
-  // Actual amount is override if set, else auto amount
-  const activeIssueAmount = issueAmountOverride !== '' ? parseFloat(issueAmountOverride) : autoIssueAmount;
+    return safeNumber(parseFloat((w * (bill / 100)).toFixed(3)));
+  }, [issueWeight, issueSRIBill]);
 
   const handleAddIssue = () => {
     if (!issueWeight || !issueSRIBill) {
@@ -402,14 +425,21 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       itemName: issueItemName || 'Manual Entry',
       weight: parseFloat(issueWeight),
       count: parseInt(issueCount) || 1,
-      sriCost: parseFloat(issueSRICost) || 0,
-      sriBill: parseFloat(issueSRIBill),
-      plus: currentIssuePlus,
-      purity: currentIssueProfit,
-      amount: activeIssueAmount
+      sriCost: 0,
+      sriBill: safeNumber(parseFloat(issueSRIBill)),
+      plus: 0,
+      purity: currentIssuePure,
+      amount: 0,
+      wastage: 0,
+      value1: 0,
+      rate: 0,
+      actualTouch: 0,
+      takenTouch: 0,
+      value2: 0,
+      profit: 0,
     };
     setIssueItems([...issueItems, newItem]);
-    
+
     // Clear Form
     setStockQuery('');
     setIssueStockId('');
@@ -417,40 +447,28 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     setIssueItemName('');
     setIssueWeight('');
     setIssueCount('1');
-    setIssueSRICost('');
     setIssueSRIBill('');
-    setIssueAmountOverride('');
   };
 
   const removeIssueItem = (id) => setIssueItems(issueItems.filter(i => i.id !== id));
 
-  // --- Calculations for Wastage Issue ---
-  // weight + wastage = value1
-  const wIssueValue1 = useMemo(() => {
+  // --- Calculations for Wastage Issue (cash model) ---
+  // WW = Weight + Wastage
+  const wIssueWW = useMemo(() => {
     const w = parseFloat(wIssueWeight) || 0;
     const wa = parseFloat(wIssueWastage) || 0;
     return w + wa;
   }, [wIssueWeight, wIssueWastage]);
 
-  // value1 * actualTouch = Purity
-  const wIssuePurity = useMemo(() => {
-    const t = parseFloat(wIssueActualTouch) || 0;
-    return wIssueValue1 * (t / 100);
-  }, [wIssueValue1, wIssueActualTouch]);
-
-  // weight * takenTouch = value2
-  const wIssueValue2 = useMemo(() => {
-    const w = parseFloat(wIssueWeight) || 0;
-    const t = parseFloat(wIssueTakenTouch) || 0;
-    return w * (t / 100);
-  }, [wIssueWeight, wIssueTakenTouch]);
-
-  // Profit = Purity - value2
-  const wIssueProfit = useMemo(() => wIssuePurity - wIssueValue2, [wIssuePurity, wIssueValue2]);
+  // Cash = WW × Rate
+  const wIssueCash = useMemo(() => {
+    const r = parseFloat(wIssueRate) || 0;
+    return safeNumber(wIssueWW * r);
+  }, [wIssueWW, wIssueRate]);
 
   const handleAddWastageIssue = () => {
-    if (!wIssueWeight || !wIssueActualTouch) {
-      Alert.alert('Error', 'Weight and Actual Touch are required.');
+    if (!wIssueWeight) {
+      Alert.alert('Error', 'Weight is required.');
       return;
     }
     const newItem = {
@@ -461,16 +479,17 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       weight: parseFloat(wIssueWeight) || 0,
       count: 1,
       wastage: parseFloat(wIssueWastage) || 0,
-      value1: wIssueValue1,
-      actualTouch: parseFloat(wIssueActualTouch) || 0,
-      purity: wIssuePurity,
-      takenTouch: parseFloat(wIssueTakenTouch) || 0,
-      value2: wIssueValue2,
-      profit: wIssueProfit,
+      value1: safeNumber(wIssueWW),
+      rate: safeNumber(parseFloat(wIssueRate) || 0),
+      amount: safeNumber(wIssueCash),
+      purity: 0,
+      actualTouch: 0,
+      takenTouch: 0,
+      value2: 0,
+      profit: 0,
       sriCost: 0,
       sriBill: 0,
       plus: 0,
-      amount: 0,
     };
     setIssueItems([...issueItems, newItem]);
 
@@ -481,8 +500,135 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     setWIssueItemName('');
     setWIssueWeight('');
     setWIssueWastage('');
-    setWIssueActualTouch('');
-    setWIssueTakenTouch('');
+    setWIssueRate('');
+  };
+
+  // --- Calculations for Wastage Receipt (cash model) ---
+  // Cash = Weight × Rate
+  const wReceiptCash = useMemo(() => {
+    const w = parseFloat(wReceiptWeight) || 0;
+    const r = parseFloat(wReceiptRate) || 0;
+    return safeNumber(w * r);
+  }, [wReceiptWeight, wReceiptRate]);
+
+  const handleAddWastageReceipt = () => {
+    if (!wReceiptWeight) {
+      Alert.alert('Error', 'Weight is required.');
+      return;
+    }
+    const newItem = {
+      id: Date.now().toString(),
+      receiptType: wReceiptType || 'Manual Entry',
+      weight: parseFloat(wReceiptWeight) || 0,
+      rate: safeNumber(parseFloat(wReceiptRate) || 0),
+      amount: safeNumber(wReceiptCash),
+      less: 0,
+      actualTouch: 0,
+      takenTouch: 0,
+      goldRate: 0,
+      purity: 0,
+      sriCost: 0,
+    };
+    setReceiptItems([...receiptItems, newItem]);
+
+    // Clear Form
+    setWReceiptType('');
+    setWReceiptWeight('');
+    setWReceiptRate('');
+  };
+
+  // --- Wastage Profit Table (independent, internal-only) ---
+  const wpBValue = useMemo(() => (parseFloat(wpWeight) || 0) * (parseFloat(wpBuying) || 0), [wpWeight, wpBuying]);
+  const wpSValue = useMemo(() => (parseFloat(wpWeight) || 0) * (parseFloat(wpSelling) || 0), [wpWeight, wpSelling]);
+  const wpProfit = useMemo(() => wpSValue - wpBValue, [wpSValue, wpBValue]);
+
+  const handleSaveWastageProfitRow = () => {
+    if (!wpWeight) {
+      Alert.alert('Error', 'Weight is required.');
+      return;
+    }
+    const row = {
+      weight: parseFloat(wpWeight) || 0,
+      buyingPercent: parseFloat(wpBuying) || 0,
+      sellingPercent: parseFloat(wpSelling) || 0,
+      bValue: wpBValue,
+      sValue: wpSValue,
+      profit: wpProfit,
+    };
+    if (wpEditingId) {
+      setWastageProfitRows(rows => rows.map(r => (r.id === wpEditingId ? { ...row, id: wpEditingId } : r)));
+    } else {
+      setWastageProfitRows(rows => [...rows, { ...row, id: Date.now().toString() }]);
+    }
+    setWpWeight('');
+    setWpBuying('');
+    setWpSelling('');
+    setWpEditingId(null);
+  };
+
+  const handleEditWastageProfitRow = (row) => {
+    setWpWeight(String(row.weight));
+    setWpBuying(String(row.buyingPercent));
+    setWpSelling(String(row.sellingPercent));
+    setWpEditingId(row.id);
+  };
+
+  const handleDeleteWastageProfitRow = (id) => {
+    setWastageProfitRows(rows => rows.filter(r => r.id !== id));
+    if (wpEditingId === id) {
+      setWpWeight(''); setWpBuying(''); setWpSelling(''); setWpEditingId(null);
+    }
+  };
+
+  // --- Plus Profit Table (independent, internal-only) ---
+  const ppBValue = useMemo(() => {
+    const w = parseFloat(ppWeight) || 0;
+    const b = parseFloat(ppBuying) || 0;
+    return safeNumber(parseFloat((w * (b / 100)).toFixed(3)));
+  }, [ppWeight, ppBuying]);
+  const ppSValue = useMemo(() => {
+    const w = parseFloat(ppWeight) || 0;
+    const s = parseFloat(ppSelling) || 0;
+    return safeNumber(parseFloat((w * (s / 100)).toFixed(3)));
+  }, [ppWeight, ppSelling]);
+  const ppProfit = useMemo(() => safeNumber(parseFloat((ppSValue - ppBValue).toFixed(3))), [ppSValue, ppBValue]);
+
+  const handleSavePlusProfitRow = () => {
+    if (!ppWeight) {
+      Alert.alert('Error', 'Weight is required.');
+      return;
+    }
+    const row = {
+      weight: parseFloat(ppWeight) || 0,
+      buyingPercent: parseFloat(ppBuying) || 0,
+      sellingPercent: parseFloat(ppSelling) || 0,
+      bValue: ppBValue,
+      sValue: ppSValue,
+      profit: ppProfit,
+    };
+    if (ppEditingId) {
+      setPlusProfitRows(rows => rows.map(r => (r.id === ppEditingId ? { ...row, id: ppEditingId } : r)));
+    } else {
+      setPlusProfitRows(rows => [...rows, { ...row, id: Date.now().toString() }]);
+    }
+    setPpWeight('');
+    setPpBuying('');
+    setPpSelling('');
+    setPpEditingId(null);
+  };
+
+  const handleEditPlusProfitRow = (row) => {
+    setPpWeight(String(row.weight));
+    setPpBuying(String(row.buyingPercent));
+    setPpSelling(String(row.sellingPercent));
+    setPpEditingId(row.id);
+  };
+
+  const handleDeletePlusProfitRow = (id) => {
+    setPlusProfitRows(rows => rows.filter(r => r.id !== id));
+    if (ppEditingId === id) {
+      setPpWeight(''); setPpBuying(''); setPpSelling(''); setPpEditingId(null);
+    }
   };
 
   // --- Calculations for B2D Issue ---
@@ -561,13 +707,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     setBdReceiptSriCost('');
   };
 
-  // --- Calculations for Receipt ---
-  const currentReceiptPurity = useMemo(() => {
+  // --- Calculations for Receipt (Plus: Pure = Weight × Buying %) ---
+  const currentReceiptPure = useMemo(() => {
     const w = parseFloat(receiptWeight) || 0;
-    const l = parseFloat(receiptLess) || 0;
-    const t = parseFloat(receiptTakenTouch) || 0;
-    return (w - l) * (t / 100);
-  }, [receiptWeight, receiptLess, receiptTakenTouch]);
+    const b = parseFloat(receiptBuyingPercent) || 0;
+    return safeNumber(parseFloat((w * (b / 100)).toFixed(3)));
+  }, [receiptWeight, receiptBuyingPercent]);
 
   const handleAddReceipt = () => {
     if (!receiptWeight) {
@@ -578,23 +723,21 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       id: Date.now().toString(),
       receiptType,
       weight: parseFloat(receiptWeight) || 0,
-      less: parseFloat(receiptLess) || 0,
-      actualTouch: parseFloat(receiptActualTouch) || 0,
-      takenTouch: parseFloat(receiptTakenTouch) || 0,
-      goldRate: parseFloat(receiptGoldRate) || 0,
-      purity: currentReceiptPurity,
-      amount: parseFloat(receiptAmountManual) || 0
+      less: 0,
+      actualTouch: safeNumber(parseFloat(receiptBuyingPercent) || 0),
+      takenTouch: 0,
+      goldRate: 0,
+      purity: currentReceiptPure,
+      amount: 0,
+      sriCost: 0,
+      rate: 0,
     };
     setReceiptItems([...receiptItems, newItem]);
-    
+
     // Clear
     setReceiptType('');
     setReceiptWeight('');
-    setReceiptLess('');
-    setReceiptActualTouch('');
-    setReceiptTakenTouch('');
-    setReceiptGoldRate('');
-    setReceiptAmountManual('');
+    setReceiptBuyingPercent('');
   };
 
   const removeReceiptItem = (id) => setReceiptItems(receiptItems.filter(i => i.id !== id));
@@ -602,19 +745,19 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // --- Running Totals ---
   const issueTotalWeight = issueItems.reduce((acc, i) => acc + i.weight, 0);
   const issueTotalPurity = issueItems.reduce((acc, i) => acc + i.purity, 0);
-  const issueTotalAmount = issueItems.reduce((acc, i) => acc + i.amount, 0);
+  const issueTotalAmount = issueItems.reduce((acc, i) => acc + safeNumber(i.amount), 0);
 
   const receiptTotalWeight = receiptItems.reduce((acc, i) => acc + i.weight, 0);
   const receiptTotalPurity = receiptItems.reduce((acc, i) => acc + i.purity, 0);
-  const receiptTotalAmount = receiptItems.reduce((acc, i) => acc + i.amount, 0);
+  const receiptTotalAmount = receiptItems.reduce((acc, i) => acc + safeNumber(i.amount), 0);
 
   // --- GST ---
   const cgstVal = gstOn ? issueTotalAmount * (parseFloat(cgstPercent) / 100) : 0;
   const sgstVal = gstOn ? issueTotalAmount * (parseFloat(sgstPercent) / 100) : 0;
-  
+
   // --- Subtotal & Final Math ---
   // finalAmount mathematically serves as the true "Subtotal Amount"
-  const finalAmount = issueTotalAmount + cgstVal + sgstVal - receiptTotalAmount;
+  const finalAmount = safeNumber(issueTotalAmount + cgstVal + sgstVal - receiptTotalAmount);
 
   // --- Gram-only ledger (Wastage & B2D): Issue Gram (Purity) - Receipt Gram (Purity) ---
   const gramOutstanding = issueTotalPurity - receiptTotalPurity;
@@ -629,7 +772,9 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
   // Handle Collect Payment Button
   const handleCollectPayment = () => {
-    const amt = paymentMode === 'Gold' ? goldConvertedAmt : (parseFloat(paymentAmount) || 0);
+    const amt = paymentMode === 'Gold'
+      ? goldConvertedAmt
+      : (paymentAmount !== '' ? (parseFloat(paymentAmount) || 0) : (isWastage ? finalAmount : 0));
     const grams = activeGoldRate > 0 ? (amt / activeGoldRate) : 0;
     setConfirmedPayment({ amount: amt, grams, mode: paymentMode });
   };
@@ -644,7 +789,19 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // Outstanding = Subtotal - Collected
   const transactionOutstanding = finalAmount - collectedAmount;
 
-  if (isGramOnly) {
+  // Plus and B2D both settle in grams, not cash — used for the auxiliary payload fields below.
+  const isGramLedger = isPlus || isGramOnly;
+
+  if (isPlus) {
+    // Case 1: Issue Pure > Receipt Pure — Difference added to Old Balance, Advance untouched.
+    // Case 2: Receipt Pure > Issue Pure — Difference added to Advance, Old Balance untouched.
+    // Case 3: equal — neither changes.
+    if (gramOutstanding > 0) {
+      oldBalanceAfter = oldBalanceBefore + gramOutstanding;
+    } else if (gramOutstanding < 0) {
+      advanceBalanceAfter = advanceBalanceBefore + Math.abs(gramOutstanding);
+    }
+  } else if (isGramOnly) {
     // Gram-only ledger: outstanding balance is added directly to old balance
     oldBalanceAfter = oldBalanceBefore + gramOutstanding;
   } else if (activeGoldRate > 0) {
@@ -702,6 +859,8 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       },
       issueItems,
       receiptItems,
+      wastageProfit: wastageProfitRows.map(({ id, ...r }) => r),
+      plusProfit: plusProfitRows.map(({ id, ...r }) => r),
       paymentDetails: {
         mode: paymentMode,
         amount: paymentMode === 'Gold' ? 0 : collectedAmount
@@ -716,12 +875,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       },
       issueTotalWeight,
       issueTotalPurity,
-      issueTotalAmount,
+      issueTotalAmount: safeNumber(issueTotalAmount),
       receiptTotalWeight,
       receiptTotalPurity,
-      receiptTotalAmount,
-      finalAmount,
-      balanceAmount: isGramOnly ? gramOutstanding : transactionOutstanding,
+      receiptTotalAmount: safeNumber(receiptTotalAmount),
+      finalAmount: safeNumber(finalAmount),
+      balanceAmount: isGramLedger ? gramOutstanding : transactionOutstanding,
       isWastage,
       goldRate: activeGoldRate,
 
@@ -736,11 +895,11 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       advanceBalanceAfter,
       convertedGram: collectedGrams,
       collectedAmount: collectedAmount,
-      outstandingAmount: isGramOnly ? 0 : Math.max(0, transactionOutstanding),
-      outstandingGram: isGramOnly
+      outstandingAmount: isGramLedger ? 0 : Math.max(0, transactionOutstanding),
+      outstandingGram: isGramLedger
         ? Math.max(0, gramOutstanding)
         : (activeGoldRate ? (Math.max(0, transactionOutstanding) / activeGoldRate) : 0),
-      status: isGramOnly
+      status: isGramLedger
         ? (gramOutstanding > 0 ? 'PARTIAL' : 'PAID')
         : (Math.max(0, transactionOutstanding) > 0 ? 'PARTIAL' : 'PAID'),
       createdAt: new Date().toISOString(),
@@ -789,7 +948,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
           <View style={styles.balances}>
             <View style={styles.balBox}>
-              <Text style={styles.balLabel}>Old Balance (g)</Text>
+              <Text style={styles.balLabel}>{isWastage ? 'Old Balance (₹)' : 'Old Balance (g)'}</Text>
               <TextInput
                 style={[styles.balValRed, { borderBottomWidth: 1, borderColor: '#D32F2F', minWidth: 70, textAlign: 'center', paddingVertical: 2 }]}
                 keyboardType="numeric"
@@ -797,15 +956,17 @@ export default function TransactionCalculationScreen({ navigation, route }) {
                 onChangeText={setOldBalanceInput}
               />
             </View>
-            <View style={styles.balBox}>
-              <Text style={styles.balLabel}>Advance (g)</Text>
-              <TextInput
-                style={[styles.balValGreen, { borderBottomWidth: 1, borderColor: '#2E7D32', minWidth: 70, textAlign: 'center', paddingVertical: 2 }]}
-                keyboardType="numeric"
-                value={advanceInput}
-                onChangeText={setAdvanceInput}
-              />
-            </View>
+            {!isWastage && (
+              <View style={styles.balBox}>
+                <Text style={styles.balLabel}>Advance (g)</Text>
+                <TextInput
+                  style={[styles.balValGreen, { borderBottomWidth: 1, borderColor: '#2E7D32', minWidth: 70, textAlign: 'center', paddingVertical: 2 }]}
+                  keyboardType="numeric"
+                  value={advanceInput}
+                  onChangeText={setAdvanceInput}
+                />
+              </View>
+            )}
           </View>
 
           {/* Gold Rate + Bill No */}
@@ -833,7 +994,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Issue Entry — Wastage (gram-only) */}
+        {/* Issue Entry — Wastage (cash flow) */}
         {isWastage && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
@@ -893,45 +1054,21 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Value (Wt + Wastage)</Text>
-              <Text style={styles.calcValue}>{wIssueValue1.toFixed(3)} g</Text>
+              <Text style={styles.inputLabel}>WW (Weight + Wastage)</Text>
+              <Text style={styles.calcValue}>{wIssueWW.toFixed(3)} g</Text>
             </View>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Actual Touch (%)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={wIssueActualTouch} onChangeText={setWIssueActualTouch} />
+              <Text style={styles.inputLabel}>Rate (₹)</Text>
+              <TextInput style={styles.inputHighlight} keyboardType="numeric" value={wIssueRate} onChangeText={setWIssueRate} placeholder="Manual Entry" />
             </View>
           </View>
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Purity (Value × Actual Touch)</Text>
-              <Text style={[styles.calcValue, { color: GOLD }]}>{wIssuePurity.toFixed(3)} g</Text>
+              <Text style={styles.inputLabel}>Cash (WW × Rate)</Text>
+              <Text style={[styles.calcValue, { color: GOLD }]}>₹{wIssueCash.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
             </View>
             <View style={styles.gridItem} />
-          </View>
-
-          <View style={{ borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 12 }} />
-
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Weight (g)</Text>
-              <Text style={styles.calcValue}>{(parseFloat(wIssueWeight) || 0).toFixed(3)} g</Text>
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Taken Touch (%)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={wIssueTakenTouch} onChangeText={setWIssueTakenTouch} />
-            </View>
-          </View>
-
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Value (Wt × Taken Touch)</Text>
-              <Text style={styles.calcValue}>{wIssueValue2.toFixed(3)} g</Text>
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Profit (Purity − Value)</Text>
-              <Text style={[styles.calcValue, { color: '#2E7D32' }]}>{wIssueProfit.toFixed(3)} g</Text>
-            </View>
           </View>
 
           <TouchableOpacity style={styles.actionBtn} onPress={handleAddWastageIssue}>
@@ -1076,37 +1213,17 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               <TextInput style={styles.input} keyboardType="numeric" value={issueWeight} onChangeText={setIssueWeight} />
             </View>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>SRI Cost (%)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={issueSRICost} onChangeText={setIssueSRICost} />
-            </View>
-          </View>
-
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>SRI Bill (%)</Text>
               <TextInput style={styles.inputHighlight} keyboardType="numeric" value={issueSRIBill} onChangeText={setIssueSRIBill} />
             </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Amount (₹)</Text>
-              <TextInput 
-                style={styles.inputHighlight} 
-                keyboardType="numeric" 
-                value={issueAmountOverride !== '' ? issueAmountOverride : (autoIssueAmount ? autoIssueAmount.toFixed(2) : '')} 
-                onChangeText={setIssueAmountOverride} 
-                placeholder="Auto Calc"
-              />
-            </View>
           </View>
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Plus (Auto)</Text>
-              <Text style={styles.calcValue}>{currentIssuePlus.toFixed(3)}</Text>
+              <Text style={styles.inputLabel}>Pure (Weight × SRI Bill)</Text>
+              <Text style={[styles.calcValue, { color: GOLD }]}>{currentIssuePure.toFixed(3)} g</Text>
             </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Profit</Text>
-              <Text style={styles.calcValue}>{currentIssueProfit.toFixed(3)} g</Text>
-            </View>
+            <View style={styles.gridItem} />
           </View>
 
           <TouchableOpacity style={styles.actionBtn} onPress={handleAddIssue}>
@@ -1120,7 +1237,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           <View key={item.id} style={styles.listItem}>
             <View style={styles.listTextCol}>
               <Text style={styles.listTitle}>{item.itemName || 'Item'} ({item.weight.toFixed(3)}g)</Text>
-              <Text style={styles.listSub}>SRI Bill: {item.sriBill}% | Plus: {item.plus.toFixed(3)} | Amt: ₹{item.amount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              <Text style={styles.listSub}>SRI Bill: {item.sriBill} | Pure: {item.purity.toFixed(3)}g</Text>
             </View>
             <TouchableOpacity onPress={() => removeIssueItem(item.id)}>
               <MaterialCommunityIcons name="trash-can-outline" size={24} color="#D32F2F" />
@@ -1128,12 +1245,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
         ))}
 
-        {/* Issue List — Wastage: only Weight, Wastage, Actual Touch, Purity appear on the bill */}
+        {/* Issue List — Wastage: WW, Rate, Cash */}
         {isWastage && issueItems.map(item => (
           <View key={item.id} style={styles.listItem}>
             <View style={styles.listTextCol}>
               <Text style={styles.listTitle}>{item.itemName || 'Item'} ({item.weight.toFixed(3)}g)</Text>
-              <Text style={styles.listSub}>Wastage: {item.wastage.toFixed(3)}g | Actual Touch: {item.actualTouch}% | Purity: {item.purity.toFixed(3)}g</Text>
+              <Text style={styles.listSub}>Wastage: {item.wastage.toFixed(3)}g | WW: {item.value1.toFixed(3)}g | Rate: ₹{item.rate} | Cash: ₹{item.amount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
             </View>
             <TouchableOpacity onPress={() => removeIssueItem(item.id)}>
               <MaterialCommunityIcons name="trash-can-outline" size={24} color="#D32F2F" />
@@ -1146,7 +1263,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           <View key={item.id} style={styles.listItem}>
             <View style={styles.listTextCol}>
               <Text style={styles.listTitle}>{item.itemName || 'Item'} ({item.weight.toFixed(3)}g)</Text>
-              <Text style={styles.listSub}>Actual Touch: {item.actualTouch}% | Purity: {item.purity.toFixed(3)}g</Text>
+              <Text style={styles.listSub}>Buying Touch: {item.actualTouch}% | Purity: {item.purity.toFixed(3)}g</Text>
             </View>
             <TouchableOpacity onPress={() => removeIssueItem(item.id)}>
               <MaterialCommunityIcons name="trash-can-outline" size={24} color="#D32F2F" />
@@ -1185,6 +1302,36 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               <Text style={styles.actionBtnText}>+ Add Receipt Item</Text>
             </TouchableOpacity>
           </View>
+        ) : isWastage ? (
+          <View style={[styles.card, {zIndex: -1}]}>
+            <Text style={styles.cardTitle}>Receipt Product</Text>
+
+            <View style={styles.gridRow}>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Receipt Type</Text>
+                <TextInput style={styles.input} value={wReceiptType} onChangeText={setWReceiptType} placeholder="Old Gold" />
+              </View>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Weight (g)</Text>
+                <TextInput style={styles.input} keyboardType="numeric" value={wReceiptWeight} onChangeText={setWReceiptWeight} />
+              </View>
+            </View>
+
+            <View style={styles.gridRow}>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Rate (₹)</Text>
+                <TextInput style={styles.inputHighlight} keyboardType="numeric" value={wReceiptRate} onChangeText={setWReceiptRate} placeholder="Manual Entry" />
+              </View>
+              <View style={styles.gridItem}>
+                <Text style={styles.inputLabel}>Cash (Weight × Rate)</Text>
+                <Text style={[styles.calcValue, { color: GOLD }]}>₹{wReceiptCash.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity style={[styles.actionBtn, {backgroundColor: '#2E7D32'}]} onPress={handleAddWastageReceipt}>
+              <Text style={styles.actionBtnText}>+ Add Receipt Item</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
         <View style={[styles.card, {zIndex: -1}]}>
           <Text style={styles.cardTitle}>Receipt Entry</Text>
@@ -1200,32 +1347,12 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Less (g)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={receiptLess} onChangeText={setReceiptLess} />
+              <Text style={styles.inputLabel}>Buying %</Text>
+              <TextInput style={styles.inputHighlight} keyboardType="numeric" value={receiptBuyingPercent} onChangeText={setReceiptBuyingPercent} />
             </View>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Actual Touch (%)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={receiptActualTouch} onChangeText={setReceiptActualTouch} />
-            </View>
-          </View>
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Taken Touch (%)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={receiptTakenTouch} onChangeText={setReceiptTakenTouch} />
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Gold Rate (₹)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={receiptGoldRate} onChangeText={setReceiptGoldRate} />
-            </View>
-          </View>
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Amount (₹)</Text>
-              <TextInput style={styles.inputHighlight} keyboardType="numeric" value={receiptAmountManual} onChangeText={setReceiptAmountManual} placeholder="Manual Entry" />
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Purity (Auto)</Text>
-              <Text style={styles.calcValue}>{currentReceiptPurity.toFixed(3)} g</Text>
+              <Text style={styles.inputLabel}>Pure (Weight × Buying %)</Text>
+              <Text style={[styles.calcValue, { color: GOLD }]}>{currentReceiptPure.toFixed(3)} g</Text>
             </View>
           </View>
           <TouchableOpacity style={[styles.actionBtn, {backgroundColor: '#2E7D32'}]} onPress={handleAddReceipt}>
@@ -1241,8 +1368,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               <Text style={styles.listTitle}>{item.receiptType || 'Receipt'} ({item.weight.toFixed(3)}g)</Text>
               {isB2D ? (
                 <Text style={styles.listSub}>SRI Cost: {item.sriCost}% | Purity: {item.purity.toFixed(3)}g</Text>
+              ) : isWastage ? (
+                <Text style={styles.listSub}>Rate: ₹{item.rate} | Cash: ₹{item.amount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
               ) : (
-                <Text style={styles.listSub}>Less: {item.less}g | T.Touch: {item.takenTouch}% | Amt: ₹{item.amount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                <Text style={styles.listSub}>Buying %: {item.actualTouch} | Pure: {item.purity.toFixed(3)}g</Text>
               )}
             </View>
             <TouchableOpacity onPress={() => removeReceiptItem(item.id)}>
@@ -1273,8 +1402,200 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           </View>
         )}
 
+        {/* Wastage Profit Table — internal-only, never shown on the bill/print */}
+        {isWastage && (
+        <View style={[styles.card, {zIndex: -2}]}>
+          <Text style={styles.cardTitle}>Wastage Profit Table</Text>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Weight</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wpWeight} onChangeText={setWpWeight} />
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Buying %</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wpBuying} onChangeText={setWpBuying} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Selling %</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wpSelling} onChangeText={setWpSelling} />
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>B Value</Text>
+              <Text style={styles.calcValue}>{wpBValue.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>S Value</Text>
+              <Text style={styles.calcValue}>{wpSValue.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Profit</Text>
+              <Text style={[styles.calcValue, { color: '#2E7D32' }]}>{wpProfit.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <TouchableOpacity style={styles.actionBtn} onPress={handleSaveWastageProfitRow}>
+            <Text style={styles.actionBtnText}>{wpEditingId ? 'Update' : 'Save'}</Text>
+          </TouchableOpacity>
+
+          {wastageProfitRows.length > 0 && (
+            <View style={{ marginTop: 12 }}>
+              {wastageProfitRows.map(row => (
+                <View key={row.id} style={styles.listItem}>
+                  <View style={styles.listTextCol}>
+                    <Text style={styles.listTitle}>Wt: {row.weight.toFixed(3)}g | B: {row.buyingPercent}% | S: {row.sellingPercent}%</Text>
+                    <Text style={styles.listSub}>B Value: {row.bValue.toLocaleString('en-IN', {maximumFractionDigits:2})} | S Value: {row.sValue.toLocaleString('en-IN', {maximumFractionDigits:2})} | Profit: {row.profit.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => handleEditWastageProfitRow(row)} style={{ marginRight: 10 }}>
+                    <MaterialCommunityIcons name="pencil-outline" size={22} color={DARK_BROWN} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleDeleteWastageProfitRow(row.id)}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={22} color="#D32F2F" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+        )}
+
+        {/* Wastage Payment Type */}
+        {isWastage && (
+        <View style={[styles.card, {zIndex: -3}]}>
+          <Text style={styles.cardTitle}>Payment Type</Text>
+          <View style={{ marginBottom: 12 }}>
+            <View style={styles.paymentRow}>
+              {['Cash', 'GPay', 'PhonePe', 'Card', 'UPI', 'Bank Transfer'].map(mode => (
+                <TouchableOpacity
+                  key={mode}
+                  style={[styles.payBtn, paymentMode === mode && styles.payBtnActive]}
+                  onPress={() => setPaymentMode(mode)}
+                >
+                  <Text style={[styles.payText, paymentMode === mode && styles.payTextActive]}>{mode}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={{ marginBottom: 12 }}>
+            <Text style={styles.inputLabel}>Amount Collected (₹)</Text>
+            <TextInput
+              style={styles.inputHighlight}
+              keyboardType="numeric"
+              value={paymentAmount !== '' ? paymentAmount : (finalAmount ? finalAmount.toFixed(2) : '')}
+              onChangeText={setPaymentAmount}
+            />
+          </View>
+
+          <View style={{ marginBottom: 12 }}>
+            <Text style={styles.inputLabel}>Description / Notes</Text>
+            <TextInput
+              style={[styles.input, {height: 80, textAlignVertical: 'top'}]}
+              multiline
+              value={description}
+              onChangeText={setDescription}
+              placeholder="E.g., Customer advance payment, Old balance settlement..."
+            />
+          </View>
+
+          <TouchableOpacity
+            style={[styles.actionBtn, confirmedPayment.amount > 0 && styles.actionBtnConfirmed]}
+            onPress={handleCollectPayment}
+          >
+            <MaterialCommunityIcons
+              name={confirmedPayment.amount > 0 ? 'check-circle-outline' : 'cash-check'}
+              size={18}
+              color={confirmedPayment.amount > 0 ? '#FFF' : DARK_BROWN}
+              style={{ marginRight: 6 }}
+            />
+            <Text style={[styles.actionBtnText, confirmedPayment.amount > 0 && { color: '#FFF' }]}>
+              {confirmedPayment.amount > 0 ? 'Update Payment' : 'Collect Payment'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        )}
+
+        {/* Plus Profit Table — internal-only, never shown on the bill/print */}
+        {isPlus && (
+        <View style={[styles.card, {zIndex: -2}]}>
+          <Text style={styles.cardTitle}>Plus Profit Table</Text>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Weight</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={ppWeight} onChangeText={setPpWeight} />
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Buying %</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={ppBuying} onChangeText={setPpBuying} />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Selling %</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={ppSelling} onChangeText={setPpSelling} />
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>B Value</Text>
+              <Text style={styles.calcValue}>{ppBValue.toFixed(3)}</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>S Value</Text>
+              <Text style={styles.calcValue}>{ppSValue.toFixed(3)}</Text>
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Profit</Text>
+              <Text style={[styles.calcValue, { color: '#2E7D32' }]}>{ppProfit.toFixed(3)}</Text>
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <TouchableOpacity style={styles.actionBtn} onPress={handleSavePlusProfitRow}>
+            <Text style={styles.actionBtnText}>{ppEditingId ? 'Update' : 'Save'}</Text>
+          </TouchableOpacity>
+
+          {plusProfitRows.length > 0 && (
+            <View style={{ marginTop: 12 }}>
+              {plusProfitRows.map(row => (
+                <View key={row.id} style={styles.listItem}>
+                  <View style={styles.listTextCol}>
+                    <Text style={styles.listTitle}>Wt: {row.weight.toFixed(3)}g | B: {row.buyingPercent}% | S: {row.sellingPercent}%</Text>
+                    <Text style={styles.listSub}>B Value: {row.bValue.toFixed(3)}g | S Value: {row.sValue.toFixed(3)}g | Profit: {row.profit.toFixed(3)}g</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => handleEditPlusProfitRow(row)} style={{ marginRight: 10 }}>
+                    <MaterialCommunityIcons name="pencil-outline" size={22} color={DARK_BROWN} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleDeletePlusProfitRow(row.id)}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={22} color="#D32F2F" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+        )}
+
         {/* GST */}
-        {!isB2D && !isWastage && (
+        {!isB2D && !isWastage && !isPlus && (
         <View style={[styles.card, {zIndex: -2}]}>
           <View style={styles.gridRow}>
             <View style={[styles.gridItem, {alignItems: 'center', justifyContent: 'center'}]}>
@@ -1315,7 +1636,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         )}
 
         {/* Payment Collection */}
-        {!isB2D && !isWastage && (
+        {!isB2D && !isWastage && !isPlus && (
         <View style={[styles.card, {zIndex: -3}]}>
           <Text style={styles.cardTitle}>Payment Collection</Text>
           <View style={{ marginBottom: 12 }}>
@@ -1390,7 +1711,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         )}
 
         {/* Confirmed Payment Card */}
-        {!isB2D && !isWastage && confirmedPayment.amount > 0 && (
+        {!isB2D && !isWastage && !isPlus && confirmedPayment.amount > 0 && (
           <View style={styles.paymentConfirmedCard}>
             <View style={styles.paymentConfirmedLeft}>
               <View style={styles.paymentConfirmedIcon}>
@@ -1417,7 +1738,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         )}
 
         {/* Live Payment Summary & Balances */}
-        {!isB2D && !isWastage && (
+        {!isB2D && !isWastage && !isPlus && (
         <View style={[styles.summaryCard, {backgroundColor: '#FAFAFA', borderColor: '#E5D8C0', zIndex: -4}]}>
           <Text style={styles.cardTitle}>Payment Summary</Text>
           <View style={styles.sumRow}>
@@ -1456,7 +1777,45 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         {/* Transaction Summary */}
         <View style={[styles.summaryCard, {zIndex: -5}]}>
           <Text style={styles.cardTitle}>Final Summary</Text>
-          {isGramOnly ? (
+          {isWastage ? (
+            <>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Total Issue Cash:</Text>
+                <Text style={styles.sumVal}>₹ {issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Total Receipt Cash:</Text>
+                <Text style={styles.sumVal}>- ₹ {receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
+                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Final Cash:</Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18}]}>₹ {finalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Payment Type:</Text>
+                <Text style={styles.sumVal}>{paymentMode}</Text>
+              </View>
+            </>
+          ) : isPlus ? (
+            <>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Total Issue Pure:</Text>
+                <Text style={styles.sumVal}>{issueTotalPurity.toFixed(3)} g</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Total Receipt Pure:</Text>
+                <Text style={styles.sumVal}>- {receiptTotalPurity.toFixed(3)} g</Text>
+              </View>
+              <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
+                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>
+                  {gramOutstanding > 0 ? 'Outstanding:' : gramOutstanding < 0 ? 'Advance:' : 'Difference:'}
+                </Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: gramOutstanding > 0 ? '#D32F2F' : gramOutstanding < 0 ? '#2E7D32' : DARK_BROWN}]}>
+                  {Math.abs(gramOutstanding).toFixed(3)} g
+                </Text>
+              </View>
+            </>
+          ) : isGramOnly ? (
             <>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>Issue Gram:</Text>

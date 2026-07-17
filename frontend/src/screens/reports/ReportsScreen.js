@@ -8,6 +8,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { reportsAPI } from '../../services/api';
 import { ReportPrintService } from '../../services/ReportPrintService';
+import { safeNumber } from '../../utils/safeNumber';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -79,8 +80,10 @@ export default function ReportsScreen({ navigation }) {
     let chitCollection = 0; data.chitFunds.forEach(c => chitCollection += c.purchasedWeight);
     let lineStockOutstanding = 0; data.lineStock.forEach(ls => lineStockOutstanding += ls.totalIssuedGram);
 
-    let customerSalesProfit = 0; data.plusSummary.forEach(p => customerSalesProfit += p.profit);
-    let wastageSummaryProfit = 0; data.wastageSummary.forEach(w => wastageSummaryProfit += w.profit);
+    let plusSummaryBValue = 0, plusSummarySValue = 0, plusSummaryProfit = 0;
+    data.plusSummary.forEach(p => { plusSummaryBValue += safeNumber(p.bValue); plusSummarySValue += safeNumber(p.sValue); plusSummaryProfit += safeNumber(p.profit); });
+    let wastageSummaryBValue = 0, wastageSummarySValue = 0, wastageSummaryProfit = 0;
+    data.wastageSummary.forEach(w => { wastageSummaryBValue += safeNumber(w.bValue); wastageSummarySValue += safeNumber(w.sValue); wastageSummaryProfit += safeNumber(w.profit); });
     let expensesTotal = 0; data.expenses.forEach(e => expensesTotal += e.amount);
 
     const exportData = {
@@ -91,7 +94,8 @@ export default function ReportsScreen({ navigation }) {
       },
       calculations: {
         debtReceivable, debtPayable, chitCollection, lineStockOutstanding,
-        customerSalesProfit, wastageSummaryProfit, expensesTotal,
+        plusSummaryBValue, plusSummarySValue, plusSummaryProfit,
+        wastageSummaryBValue, wastageSummarySValue, wastageSummaryProfit, expensesTotal,
       }
     };
 
@@ -154,11 +158,11 @@ export default function ReportsScreen({ navigation }) {
     data.lineStock.forEach(ls => lineStockOutstanding += ls.totalIssuedGram);
 
     // Profit Section
-    let customerSalesProfit = 0;
-    data.plusSummary.forEach(p => customerSalesProfit += p.profit);
+    let plusSummaryBValue = 0, plusSummarySValue = 0, plusSummaryProfit = 0;
+    data.plusSummary.forEach(p => { plusSummaryBValue += safeNumber(p.bValue); plusSummarySValue += safeNumber(p.sValue); plusSummaryProfit += safeNumber(p.profit); });
 
-    let wastageSummaryProfit = 0;
-    data.wastageSummary.forEach(w => wastageSummaryProfit += w.profit);
+    let wastageSummaryBValue = 0, wastageSummarySValue = 0, wastageSummaryProfit = 0;
+    data.wastageSummary.forEach(w => { wastageSummaryBValue += safeNumber(w.bValue); wastageSummarySValue += safeNumber(w.sValue); wastageSummaryProfit += safeNumber(w.profit); });
 
     let expensesTotal = 0;
     data.expenses.forEach(e => expensesTotal += e.amount);
@@ -189,38 +193,42 @@ export default function ReportsScreen({ navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>2. PLUS SUMMARY TABLE</Text>
           <View style={styles.tableHeaderRow}>
-            <Text style={[styles.tableHeader, { flex: 1 }]}>Plus (%)</Text>
-            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'center' }]}>Weight</Text>
+            <Text style={[styles.tableHeader, { flex: 1 }]}>B Value</Text>
+            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'center' }]}>S Value</Text>
             <Text style={[styles.tableHeader, { flex: 1, textAlign: 'right' }]}>Profit</Text>
           </View>
           {data.plusSummary.map((p, idx) => (
             <View key={idx} style={styles.tableRow}>
-              <Text style={[styles.rowValue, { flex: 1 }]}>{p.plus}%</Text>
-              <Text style={[styles.rowValue, { flex: 1, textAlign: 'center' }]}>{p.totalWeight.toFixed(3)}g</Text>
-              <Text style={[styles.rowValue, { flex: 1, textAlign: 'right', color: '#27AE60' }]}>{p.profit.toFixed(3)}g</Text>
+              <Text style={[styles.rowValue, { flex: 1 }]}>{safeNumber(p.bValue).toFixed(3)}g</Text>
+              <Text style={[styles.rowValue, { flex: 1, textAlign: 'center' }]}>{safeNumber(p.sValue).toFixed(3)}g</Text>
+              <Text style={[styles.rowValue, { flex: 1, textAlign: 'right', color: '#27AE60' }]}>{safeNumber(p.profit).toFixed(3)}g</Text>
             </View>
           ))}
           <View style={styles.divider} />
-          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Profit</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>{customerSalesProfit.toFixed(3)}g</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total B Value</Text><Text style={styles.calcValueTotal}>{plusSummaryBValue.toFixed(3)}g</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total S Value</Text><Text style={styles.calcValueTotal}>{plusSummarySValue.toFixed(3)}g</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Profit</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>{plusSummaryProfit.toFixed(3)}g</Text></View>
         </View>
 
         {/* SECTION 3: WASTAGE SUMMARY */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>3. WASTAGE SUMMARY TABLE</Text>
           <View style={styles.tableHeaderRow}>
-            <Text style={[styles.tableHeader, { flex: 1 }]}>Wastage</Text>
-            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'center' }]}>Weight</Text>
+            <Text style={[styles.tableHeader, { flex: 1 }]}>B Value</Text>
+            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'center' }]}>S Value</Text>
             <Text style={[styles.tableHeader, { flex: 1, textAlign: 'right' }]}>Profit</Text>
           </View>
           {data.wastageSummary.map((w, idx) => (
             <View key={idx} style={styles.tableRow}>
-              <Text style={[styles.rowValue, { flex: 1 }]}>{Number(w.wastage || 0).toFixed(3)}g</Text>
-              <Text style={[styles.rowValue, { flex: 1, textAlign: 'center' }]}>{w.totalWeight.toFixed(3)}g</Text>
-              <Text style={[styles.rowValue, { flex: 1, textAlign: 'right', color: '#27AE60' }]}>{w.profit.toFixed(3)}g</Text>
+              <Text style={[styles.rowValue, { flex: 1 }]}>₹{safeNumber(w.bValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              <Text style={[styles.rowValue, { flex: 1, textAlign: 'center' }]}>₹{safeNumber(w.sValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              <Text style={[styles.rowValue, { flex: 1, textAlign: 'right', color: '#27AE60' }]}>₹{safeNumber(w.profit).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
             </View>
           ))}
           <View style={styles.divider} />
-          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Profit</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>{wastageSummaryProfit.toFixed(3)}g</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total B Value</Text><Text style={styles.calcValueTotal}>₹{safeNumber(wastageSummaryBValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total S Value</Text><Text style={styles.calcValueTotal}>₹{safeNumber(wastageSummarySValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabelTotal}>Total Profit</Text><Text style={[styles.calcValueTotal, { color: '#27AE60' }]}>₹{safeNumber(wastageSummaryProfit).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
         </View>
 
         {/* SECTION 4: DEBT PAYABLE */}

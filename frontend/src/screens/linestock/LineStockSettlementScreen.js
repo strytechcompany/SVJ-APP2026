@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { lineStockAPI, customerAPI } from '../../services/api';
 import { LineStockSettlementPrintService } from '../../services/PrintService';
+import { useDashboard } from '../../context/DashboardContext';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -21,6 +22,10 @@ export default function LineStockSettlementScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingAndPrinting, setSavingAndPrinting] = useState(false);
+  const [savingItemId, setSavingItemId] = useState(null);
+
+  const { goldRate: dashGoldRate } = useDashboard();
+  const goldRatePerGram = dashGoldRate?.rate || 0;
 
   // Data
   const [transaction, setTransaction] = useState(null);
@@ -33,8 +38,6 @@ export default function LineStockSettlementScreen({ route, navigation }) {
 
   // Payments & Remarks
   const [cash, setCash] = useState('');
-  const [online, setOnline] = useState('');
-  const [card, setCard] = useState('');
   const [goldPayment, setGoldPayment] = useState('');
   const [remarks, setRemarks] = useState('');
 
@@ -42,12 +45,35 @@ export default function LineStockSettlementScreen({ route, navigation }) {
     const fetchData = async () => {
       try {
         const txnRes = await lineStockAPI.getTransactionById(transactionId);
-        
+
         if (txnRes.data.success) {
           const txn = txnRes.data.data;
           setTransaction(txn);
-          setPendingItems(txn.issuedProducts || []);
-          
+
+          let pending = txn.issuedProducts || [];
+
+          // Restore any Sold Products already saved to a draft settlement,
+          // so leaving and returning to this screen doesn't lose them.
+          try {
+            const draftRes = await lineStockAPI.getDraftSettlement(transactionId);
+            const draft = draftRes.data.success ? draftRes.data.data : null;
+            if (draft && draft.soldItems && draft.soldItems.length > 0) {
+              const savedStockIds = new Set(draft.soldItems.map(s => String(s.stockId)));
+              const restoredSold = pending
+                .filter(p => savedStockIds.has(String(p.stockId)))
+                .map(p => {
+                  const draftItem = draft.soldItems.find(s => String(s.stockId) === String(p.stockId));
+                  return { ...p, amount: String(draftItem.amount), saved: true };
+                });
+              pending = pending.filter(p => !savedStockIds.has(String(p.stockId)));
+              setSoldItems(restoredSold);
+            }
+          } catch (e) {
+            // Non-fatal — proceed without restoring a draft.
+          }
+
+          setPendingItems(pending);
+
           if (txn.customerId) {
             const custRes = await customerAPI.getById(txn.customerId._id || txn.customerId);
             if (custRes.data.success) setCustomer(custRes.data.data);
@@ -66,7 +92,7 @@ export default function LineStockSettlementScreen({ route, navigation }) {
   // Actions
   const handleMarkSold = (item) => {
     setPendingItems(prev => prev.filter(p => p._id !== item._id));
-    setSoldItems(prev => [...prev, { ...item, amount: '' }]);
+    setSoldItems(prev => [...prev, { ...item, amount: '', saved: false }]);
   };
 
   const handleMarkReturned = (item) => {
@@ -74,14 +100,58 @@ export default function LineStockSettlementScreen({ route, navigation }) {
     setReturnedItems(prev => [...prev, item]);
   };
 
-  const handleRevert = (item, fromList) => {
-    if (fromList === 'sold') setSoldItems(prev => prev.filter(p => p._id !== item._id));
+  const handleRevert = async (item, fromList) => {
+    if (fromList === 'sold') {
+      setSoldItems(prev => prev.filter(p => p._id !== item._id));
+      if (item.saved) {
+        try {
+          await lineStockAPI.deleteSoldItem(transactionId, item.stockId);
+        } catch (e) {
+          // Best-effort — local state is already reverted either way.
+        }
+      }
+    }
     if (fromList === 'returned') setReturnedItems(prev => prev.filter(p => p._id !== item._id));
     setPendingItems(prev => [...prev, item]);
   };
 
   const updateSoldAmount = (itemId, amount) => {
     setSoldItems(prev => prev.map(p => p._id === itemId ? { ...p, amount } : p));
+  };
+
+  const handleSaveSoldItem = async (item) => {
+    if (!item.amount || parseFloat(item.amount) <= 0) {
+      Alert.alert('Error', 'Please enter a valid sold amount.');
+      return;
+    }
+    setSavingItemId(item._id);
+    try {
+      const res = await lineStockAPI.saveSoldItem({
+        lineStockTransactionId: transactionId,
+        customerId: customer._id,
+        item: {
+          stockId: item.stockId,
+          itemNumber: item.itemNumber,
+          barcode: item.barcode,
+          itemName: item.itemName,
+          weight: item.weight,
+          purity: item.purity,
+          count: item.count,
+          amount: parseFloat(item.amount) || 0,
+        },
+      });
+      if (res.data.success) {
+        setSoldItems(prev => prev.map(p => p._id === item._id ? { ...p, saved: true } : p));
+      }
+    } catch (e) {
+      Alert.alert('Error', e.response?.data?.message || 'Failed to save sold product.');
+    } finally {
+      setSavingItemId(null);
+    }
+  };
+
+  const handleEditSoldItem = (item) => {
+    setSoldItems(prev => prev.map(p => p._id === item._id ? { ...p, saved: false } : p));
   };
 
   // Auto-Calculations
@@ -95,7 +165,9 @@ export default function LineStockSettlementScreen({ route, navigation }) {
   const totalReturnedItems = returnedItems.reduce((sum, item) => sum + item.count, 0);
   const totalReturnedWeight = returnedItems.reduce((sum, item) => sum + item.weight, 0);
 
-  const totalCashInput = (parseFloat(cash) || 0) + (parseFloat(online) || 0) + (parseFloat(card) || 0);
+  const cashValue = parseFloat(cash) || 0;
+  const goldValue = (parseFloat(goldPayment) || 0) * goldRatePerGram;
+  const totalReceived = cashValue + goldValue;
 
   const previousBalance = customer ? customer.oldBalance : 0;
   const currentAdvance = customer ? customer.advance : 0;
@@ -155,8 +227,8 @@ export default function LineStockSettlementScreen({ route, navigation }) {
         })),
         paymentDetails: {
           cash: parseFloat(cash) || 0,
-          online: parseFloat(online) || 0,
-          card: parseFloat(card) || 0,
+          online: 0,
+          card: 0,
           gold: parseFloat(goldPayment) || 0,
           receivedGram: 0
         },
@@ -256,13 +328,33 @@ export default function LineStockSettlementScreen({ route, navigation }) {
                   <Text style={styles.itemName}>{item.itemName} ({item.itemNumber})</Text>
                   <Text style={styles.itemSub}>{item.weight.toFixed(3)}g | {item.purity}</Text>
                 </View>
-                <TextInput
-                  style={styles.amountInput}
-                  placeholder="₹ Amount"
-                  keyboardType="numeric"
-                  value={item.amount}
-                  onChangeText={(val) => updateSoldAmount(item._id, val)}
-                />
+                {item.saved ? (
+                  <>
+                    <Text style={[styles.amountInput, { paddingTop: 8 }]}>₹{(parseFloat(item.amount) || 0).toFixed(2)}</Text>
+                    <TouchableOpacity style={{ marginLeft: 8 }} onPress={() => handleEditSoldItem(item)}>
+                      <MaterialCommunityIcons name="pencil-outline" size={20} color={DARK_BROWN} />
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <TextInput
+                      style={styles.amountInput}
+                      placeholder="₹ Amount"
+                      keyboardType="numeric"
+                      value={item.amount}
+                      onChangeText={(val) => updateSoldAmount(item._id, val)}
+                    />
+                    <TouchableOpacity
+                      style={{ marginLeft: 8 }}
+                      onPress={() => handleSaveSoldItem(item)}
+                      disabled={savingItemId === item._id}
+                    >
+                      {savingItemId === item._id
+                        ? <ActivityIndicator size="small" color="#27AE60" />
+                        : <MaterialCommunityIcons name="content-save-outline" size={20} color="#27AE60" />}
+                    </TouchableOpacity>
+                  </>
+                )}
                 <TouchableOpacity style={{ marginLeft: 8 }} onPress={() => handleRevert(item, 'sold')}>
                   <MaterialCommunityIcons name="undo" size={20} color="#E74C3C" />
                 </TouchableOpacity>
@@ -299,20 +391,12 @@ export default function LineStockSettlementScreen({ route, navigation }) {
             <TextInput style={styles.paymentInput} keyboardType="numeric" value={cash} onChangeText={setCash} placeholder="0" />
           </View>
           <View style={styles.paymentInputRow}>
-            <Text style={styles.paymentLabel}>Online (₹)</Text>
-            <TextInput style={styles.paymentInput} keyboardType="numeric" value={online} onChangeText={setOnline} placeholder="0" />
-          </View>
-          <View style={styles.paymentInputRow}>
-            <Text style={styles.paymentLabel}>Card (₹)</Text>
-            <TextInput style={styles.paymentInput} keyboardType="numeric" value={card} onChangeText={setCard} placeholder="0" />
-          </View>
-          <View style={styles.paymentInputRow}>
             <Text style={styles.paymentLabel}>Gold (g)</Text>
             <TextInput style={styles.paymentInput} keyboardType="numeric" value={goldPayment} onChangeText={setGoldPayment} placeholder="0.000" />
           </View>
-          
+
           <View style={styles.divider} />
-          <View style={styles.row}><Text style={styles.label}>Total Received Cash:</Text><Text style={styles.value}>₹{totalCashInput}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Total Received:</Text><Text style={styles.value}>₹{totalReceived.toFixed(2)}</Text></View>
         </View>
 
         {/* Description Section */}
@@ -345,7 +429,7 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           
           <View style={styles.divider} />
           
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Cash Payments Received</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>₹{totalCashInput.toFixed(2)}</Text></View>
+          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Received (Cash + Gold)</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>₹{totalReceived.toFixed(2)}</Text></View>
 
           <View style={styles.divider} />
           

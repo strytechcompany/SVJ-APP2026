@@ -6,6 +6,7 @@ const Expense = require('../models/Expense');
 const ChitTransaction = require('../models/ChitTransaction');
 const LineStockTransaction = require('../models/LineStockTransaction');
 const CashLedger = require('../models/CashLedger');
+const { safeNumber } = require('../utils/safeNumber');
 
 exports.getReportData = async (req, res) => {
   try {
@@ -103,42 +104,51 @@ exports.getReportData = async (req, res) => {
     const combinedCustomerSales = [...customerSalesAgg, ...lineStockerSalesAgg]
       .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    // 3. Plus Summary Table — genuine PLUS-category B2C sales only (excludes B2D & WASTAGE issues)
-    const plusSummaryAgg = await Transaction.aggregate([
+    // 3. Plus Summary Table — one row per saved Plus Profit entry (B Value / S Value / Profit)
+    const plusSummaryAggRaw = await Transaction.aggregate([
       { $match: { createdAt: dateFilter, transactionType: 'B2C', isWastage: { $ne: true } } },
-      { $unwind: "$issueItems" },
-      { $group: {
-          _id: "$issueItems.plus",
-          totalWeight: { $sum: "$issueItems.weight" }
-        }
-      },
+      { $unwind: "$plusProfit" },
       { $project: {
-          plus: "$_id",
-          totalWeight: 1,
-          profit: { $multiply: ["$totalWeight", { $divide: ["$_id", 100] }] }
+          _id: 0,
+          weight: "$plusProfit.weight",
+          buyingPercent: "$plusProfit.buyingPercent",
+          sellingPercent: "$plusProfit.sellingPercent",
+          bValue: "$plusProfit.bValue",
+          sValue: "$plusProfit.sValue",
+          profit: "$plusProfit.profit"
         }
-      },
-      { $sort: { plus: -1 } }
+      }
     ]);
+    // Guard against any legacy Infinity/-Infinity/NaN values already stored in MongoDB.
+    const plusSummaryAgg = plusSummaryAggRaw.map(p => ({
+      ...p,
+      bValue: safeNumber(p.bValue),
+      sValue: safeNumber(p.sValue),
+      profit: safeNumber(p.profit),
+    }));
 
-    // 3b. Wastage Summary Table — from items issued to WASTAGE-category B2C customers
-    const wastageSummaryAgg = await Transaction.aggregate([
+    // 3b. Wastage Summary Table — one row per saved Wastage Profit entry (B Value / S Value / Profit)
+    const wastageSummaryAggRaw = await Transaction.aggregate([
       { $match: { createdAt: dateFilter, transactionType: 'B2C', isWastage: true } },
-      { $unwind: "$issueItems" },
-      { $group: {
-          _id: "$issueItems.wastage",
-          totalWeight: { $sum: "$issueItems.weight" },
-          profit: { $sum: "$issueItems.profit" }
-        }
-      },
+      { $unwind: "$wastageProfit" },
       { $project: {
-          wastage: "$_id",
-          totalWeight: 1,
-          profit: 1
+          _id: 0,
+          weight: "$wastageProfit.weight",
+          buyingPercent: "$wastageProfit.buyingPercent",
+          sellingPercent: "$wastageProfit.sellingPercent",
+          bValue: "$wastageProfit.bValue",
+          sValue: "$wastageProfit.sValue",
+          profit: "$wastageProfit.profit"
         }
-      },
-      { $sort: { wastage: -1 } }
+      }
     ]);
+    // Guard against any legacy Infinity/-Infinity/NaN values already stored in MongoDB.
+    const wastageSummaryAgg = wastageSummaryAggRaw.map(w => ({
+      ...w,
+      bValue: safeNumber(w.bValue),
+      sValue: safeNumber(w.sValue),
+      profit: safeNumber(w.profit),
+    }));
 
     // 4. Debt Payable (Advance > 0)
     const debtPayable = await Customer.find({ advance: { $gt: 0 } })

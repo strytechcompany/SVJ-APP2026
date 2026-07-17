@@ -9,6 +9,7 @@ import { transactionAPI, settlementAPI } from '../../services/api';
 import { PrintService, SettlementPrintService } from '../../services/PrintService';
 import { useDashboard } from '../../context/DashboardContext';
 import { useAuth } from '../../context/AuthContext';
+import { safeNumber } from '../../utils/safeNumber';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -23,7 +24,11 @@ export default function BillPreviewScreen({ navigation, route }) {
   const [saving, setSaving] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [sharing, setSharing] = useState(false);
+  // Wastage: Collect Cash / Add to Balance only select the payment option now —
+  // the bill isn't saved until the separate "Save Bill" button is pressed.
+  const [selectedPaymentOption, setSelectedPaymentOption] = useState(null);
   const printLockRef = useRef(false);
+  const savingLockRef = useRef(false);
   const [tamilMsg, setTamilMsg] = useState('நீங்கள் வாங்கும் ஒவ்வொரு கிராம் தங்கமும், உங்கள் எதிர்காலத்தின் ஒளிமயமான சேமிப்பு.');
 
   const withPrintLock = async (stateSetter, fn) => {
@@ -116,7 +121,7 @@ export default function BillPreviewScreen({ navigation, route }) {
     issueTotalWeight, issueTotalPurity, issueTotalAmount, receiptTotalWeight, receiptTotalPurity, receiptTotalAmount,
     finalAmount, goldRate, goldPaymentWeight, goldPaymentPurity, goldConvertedAmount,
     oldBalanceBefore, oldBalanceAfter, advanceBalanceBefore, advanceBalanceAfter, convertedGram, gstDetails,
-    commonBillNo, isWastage,
+    commonBillNo, isWastage, status, paymentOption,
   } = transaction;
 
   // In preview mode customerId is a plain ID string; use transaction.customer instead
@@ -127,9 +132,83 @@ export default function BillPreviewScreen({ navigation, route }) {
   const dateStr = new Date(createdAt).toLocaleDateString('en-GB');
   const timeStr = new Date(createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   const collectedAmount = paymentMode === 'Gold' ? goldConvertedAmount : (paymentDetails?.amount || 0);
-  // B2D is also a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance
+  // B2D is a gram-only ledger (no money): Issue/Receipt Gram, Outstanding Balance.
+  // Wastage uses a cash model (WW × Rate) and is handled separately below.
   const isB2DBill = transactionType === 'B2D';
-  const isGramOnly = isWastage || isB2DBill;
+  const isGramOnly = isB2DBill;
+  // Plus: every non-Wastage B2C bill — a Pure-weight (gram) ledger, no cash/GST involved.
+  const isPlusBill = transactionType === 'B2C' && !isWastage;
+  // Sanitized wastage cash fields — never let Infinity/-Infinity/NaN reach the bill.
+  const safeIssueTotalAmount = safeNumber(issueTotalAmount);
+  const safeReceiptTotalAmount = safeNumber(receiptTotalAmount);
+  const safeFinalAmount = safeNumber(finalAmount);
+
+  // Navigates into the same edit-in-place flow already used from Customer
+  // Details / Transaction Management — updates the existing bill by
+  // editTransactionId rather than creating a duplicate.
+  const handleEditBill = () => {
+    const customerId = typeof transaction.customerId === 'object' ? transaction.customerId._id : transaction.customerId;
+    navigation.navigate(`${transaction.transactionType}Calculation`, {
+      type: transaction.transactionType,
+      customerId,
+      editTransactionId: transaction._id,
+      prefilledData: transaction,
+    });
+  };
+
+  // Wastage: Collect Cash / Add to Balance only choose the payment option
+  // (below). The bill is saved to MongoDB only when this is called, which
+  // happens exclusively from the separate "Save Bill" button.
+  const handleSaveWastageBill = async () => {
+    if (!selectedPaymentOption) return;
+    if (savingLockRef.current) return;
+    savingLockRef.current = true;
+    setSaving(true);
+    try {
+      const isCollectCash = selectedPaymentOption === 'COLLECT_CASH';
+      const newCollectedAmount = isCollectCash ? safeFinalAmount : 0;
+      const newOutstandingAmount = isCollectCash ? 0 : safeFinalAmount;
+      const newOldBalanceAfter = isCollectCash ? 0 : safeNumber(safeNumber(oldBalanceBefore) + safeFinalAmount);
+      const newStatus = isCollectCash ? 'PAID' : 'PARTIAL';
+
+      let res;
+      if (transaction.editTransactionId) {
+        res = await transactionAPI.update(transaction.editTransactionId, {
+          newIssueItems: transaction.issueItems || [],
+          newReceiptItems: transaction.receiptItems || [],
+          newWastageProfit: transaction.wastageProfit || [],
+          paymentOption: selectedPaymentOption,
+          paymentMode: transaction.paymentMode || 'Cash',
+          paymentDetails: { mode: transaction.paymentMode || 'Cash', amount: newCollectedAmount },
+        });
+      } else {
+        res = await transactionAPI.create({
+          ...transaction,
+          paymentOption: selectedPaymentOption,
+          collectedAmount: newCollectedAmount,
+          outstandingAmount: newOutstandingAmount,
+          outstandingGram: 0,
+          oldBalanceAfter: newOldBalanceAfter,
+          advanceBalanceAfter: safeNumber(advanceBalanceBefore),
+          status: newStatus,
+          paymentDetails: { mode: transaction.paymentMode || 'Cash', amount: newCollectedAmount },
+        });
+      }
+      if (res.data.success) {
+        Alert.alert(
+          'Success',
+          'Bill Saved Successfully',
+          [{ text: 'OK', onPress: () => navigation.reset({ index: 0, routes: [{ name: 'Main' }] }) }]
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert('Error', err.response?.data?.message || 'Failed to save transaction.');
+      savingLockRef.current = false;
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -169,8 +248,8 @@ export default function BillPreviewScreen({ navigation, route }) {
           <Text style={styles.sectionTitle}>CUSTOMER DETAILS</Text>
           <View style={styles.row}><Text style={styles.mono}>Name:</Text><Text style={styles.mono}>{customerInfo.customerName || '—'}</Text></View>
           <View style={styles.row}><Text style={styles.mono}>Phone:</Text><Text style={styles.mono}>{customerInfo.phoneNumber || '—'}</Text></View>
-          <View style={styles.row}><Text style={styles.mono}>Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceBefore).toFixed(3)}g</Text></View>
-          <View style={styles.row}><Text style={styles.mono}>Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>
+          <View style={styles.row}><Text style={styles.mono}>Old Bal:</Text><Text style={styles.mono}>{isWastage ? `₹${safeNumber(oldBalanceBefore).toLocaleString('en-IN', {maximumFractionDigits:2})}` : `${Number(oldBalanceBefore).toFixed(3)}g`}</Text></View>
+          {!isWastage && <View style={styles.row}><Text style={styles.mono}>Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>}
 
           <Text style={styles.divider}>--------------------------------</Text>
           <View style={styles.rateBox}>
@@ -184,26 +263,24 @@ export default function BillPreviewScreen({ navigation, route }) {
               {isWastage ? (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={[styles.th, {flex: 2}]}>Item</Text>
-                    <Text style={[styles.th, {flex: 1}]}>Wt(g)</Text>
-                    <Text style={[styles.th, {flex: 1}]}>Wst(g)</Text>
-                    <Text style={[styles.th, {flex: 1}]}>A.Tch%</Text>
-                    <Text style={[styles.th, {flex: 1, textAlign: 'right'}]}>Purity</Text>
+                    <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>WW(g)</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Rate(₹)</Text>
+                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Cash(₹)</Text>
                   </View>
                   {issueItems.map((item, index) => (
                     <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
                       <View style={styles.tr}>
-                        <Text style={[styles.td, {flex: 2}]}>{item.itemName || item.itemNumber || '-'}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.weight).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.wastage || 0).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.actualTouch || 0).toFixed(2)}</Text>
-                        <Text style={[styles.td, {flex: 1, textAlign: 'right'}]}>{Number(item.purity).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 2.5}]}>{item.itemName || item.itemNumber || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.value1 || 0).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{safeNumber(item.rate).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{safeNumber(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
                       </View>
                     </View>
                   ))}
                   <Text style={styles.dividerDotted}>................................</Text>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{issueTotalWeight.toFixed(3)}g</Text></View>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total Purity:</Text><Text style={styles.monoBold}>{issueTotalPurity.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total WW:</Text><Text style={styles.monoBold}>{issueItems.reduce((s,i)=>s+(i.value1||0),0).toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Cash:</Text><Text style={styles.monoBold}>₹{safeIssueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
                 </>
               ) : isB2DBill ? (
                 <>
@@ -232,22 +309,22 @@ export default function BillPreviewScreen({ navigation, route }) {
                   <View style={styles.tableHeader}>
                     <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
                     <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
-                    <Text style={[styles.th, {flex: 1}]}>Purity</Text>
-                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Amt(₹)</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>SRI Bill</Text>
+                    <Text style={[styles.th, {flex: 1.2, textAlign: 'right'}]}>Pure</Text>
                   </View>
                   {issueItems.map((item, index) => (
                     <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
                       <View style={styles.tr}>
                         <Text style={[styles.td, {flex: 2.5}]}>{item.itemName || item.itemNumber || '-'}</Text>
                         <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.purity).toFixed(2)}</Text>
-                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{Number(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.sriBill || 0)}</Text>
+                        <Text style={[styles.td, {flex: 1.2, textAlign: 'right'}]}>{safeNumber(item.purity).toFixed(3)}</Text>
                       </View>
                     </View>
                   ))}
                   <Text style={styles.dividerDotted}>................................</Text>
                   <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{issueTotalWeight.toFixed(3)}g</Text></View>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total Amt:</Text><Text style={styles.monoBold}>₹{issueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Pure:</Text><Text style={styles.monoBold}>{safeNumber(issueTotalPurity).toFixed(3)}g</Text></View>
                 </>
               )}
             </>
@@ -260,26 +337,24 @@ export default function BillPreviewScreen({ navigation, route }) {
               {isWastage ? (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={[styles.th, {flex: 2}]}>Type</Text>
-                    <Text style={[styles.th, {flex: 1}]}>Wt(g)</Text>
-                    <Text style={[styles.th, {flex: 1}]}>Less(g)</Text>
-                    <Text style={[styles.th, {flex: 1}]}>T.Tch%</Text>
-                    <Text style={[styles.th, {flex: 1, textAlign: 'right'}]}>Purity</Text>
+                    <Text style={[styles.th, {flex: 2.5}]}>Type</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Rate(₹)</Text>
+                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Cash(₹)</Text>
                   </View>
                   {receiptItems.map((item, index) => (
                     <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
                       <View style={styles.tr}>
-                        <Text style={[styles.td, {flex: 2}]}>{item.receiptType || '-'}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.weight).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.less || 0).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.takenTouch || 0).toFixed(2)}</Text>
-                        <Text style={[styles.td, {flex: 1, textAlign: 'right'}]}>{Number(item.purity).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 2.5}]}>{item.receiptType || '-'}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{safeNumber(item.rate).toFixed(2)}</Text>
+                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{safeNumber(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
                       </View>
                     </View>
                   ))}
                   <Text style={styles.dividerDotted}>................................</Text>
                   <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{receiptTotalWeight.toFixed(3)}g</Text></View>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total Purity:</Text><Text style={styles.monoBold}>{receiptTotalPurity.toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Cash:</Text><Text style={styles.monoBold}>₹{safeReceiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
                 </>
               ) : isB2DBill ? (
                 <>
@@ -308,28 +383,28 @@ export default function BillPreviewScreen({ navigation, route }) {
                   <View style={styles.tableHeader}>
                     <Text style={[styles.th, {flex: 2.5}]}>Type</Text>
                     <Text style={[styles.th, {flex: 1.2}]}>Wt(g)</Text>
-                    <Text style={[styles.th, {flex: 1}]}>Purity</Text>
-                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Amt(₹)</Text>
+                    <Text style={[styles.th, {flex: 1.2}]}>Buying %</Text>
+                    <Text style={[styles.th, {flex: 1.2, textAlign: 'right'}]}>Pure</Text>
                   </View>
                   {receiptItems.map((item, index) => (
                     <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
                       <View style={styles.tr}>
                         <Text style={[styles.td, {flex: 2.5}]}>{item.receiptType || '-'}</Text>
                         <Text style={[styles.td, {flex: 1.2}]}>{Number(item.weight).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1}]}>{Number(item.purity).toFixed(2)}</Text>
-                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{Number(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.actualTouch || 0)}</Text>
+                        <Text style={[styles.td, {flex: 1.2, textAlign: 'right'}]}>{safeNumber(item.purity).toFixed(3)}</Text>
                       </View>
                     </View>
                   ))}
                   <Text style={styles.dividerDotted}>................................</Text>
                   <View style={styles.row}><Text style={styles.monoBold}>Total Wt:</Text><Text style={styles.monoBold}>{receiptTotalWeight.toFixed(3)}g</Text></View>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total Amt:</Text><Text style={styles.monoBold}>₹{receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Pure:</Text><Text style={styles.monoBold}>{safeNumber(receiptTotalPurity).toFixed(3)}g</Text></View>
                 </>
               )}
             </>
           )}
 
-          {!isGramOnly && collectedAmount > 0 && (
+          {!isGramOnly && !isPlusBill && collectedAmount > 0 && (
             <>
               <Text style={styles.divider}>--------------------------------</Text>
               <Text style={styles.sectionTitle}>PAYMENT DETAILS</Text>
@@ -342,7 +417,48 @@ export default function BillPreviewScreen({ navigation, route }) {
 
           <Text style={styles.divider}>--------------------------------</Text>
           <Text style={styles.sectionTitle}>SUMMARY</Text>
-          {isGramOnly ? (
+          {isWastage ? (
+            <>
+              <View style={styles.row}><Text style={styles.mono}>Issue Cash:</Text><Text style={styles.mono}>₹{safeIssueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Receipt Cash:</Text><Text style={styles.mono}>- ₹{safeReceiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={styles.monoBold}>FINAL CASH:</Text><Text style={styles.monoBold}>₹{safeFinalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Payment Type:</Text><Text style={styles.mono}>{paymentMode}</Text></View>
+              {(() => {
+                // In preview mode, reflect the locally selected (not-yet-saved) option;
+                // once saved, reflect the transaction's actual stored status.
+                const previewStatus = isPreviewMode
+                  ? (selectedPaymentOption === 'COLLECT_CASH' ? 'PAID' : selectedPaymentOption === 'ADD_TO_BALANCE' ? 'PARTIAL' : null)
+                  : (status || null);
+                if (!previewStatus) return null;
+                const previewBalance = isPreviewMode
+                  ? safeNumber(safeNumber(oldBalanceBefore) + safeFinalAmount)
+                  : safeNumber(oldBalanceAfter);
+                return (
+                  <>
+                    <Text style={styles.dividerDotted}>................................</Text>
+                    <View style={styles.row}><Text style={styles.mono}>Payment Status:</Text><Text style={styles.monoBold}>{previewStatus === 'PAID' ? 'Paid' : 'Balance'}</Text></View>
+                    {previewStatus === 'PARTIAL' && (
+                      <View style={styles.row}><Text style={styles.monoBold}>Balance Amount:</Text><Text style={styles.monoBold}>₹{previewBalance.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                    )}
+                  </>
+                );
+              })()}
+            </>
+          ) : isPlusBill ? (
+            <>
+              <View style={styles.row}><Text style={styles.mono}>Total Issue Pure:</Text><Text style={styles.mono}>{safeNumber(issueTotalPurity).toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Total Receipt Pure:</Text><Text style={styles.mono}>- {safeNumber(receiptTotalPurity).toFixed(3)}g</Text></View>
+              <View style={styles.row}>
+                <Text style={styles.monoBold}>DIFFERENCE:</Text>
+                <Text style={styles.monoBold}>{Math.abs(safeNumber(issueTotalPurity) - safeNumber(receiptTotalPurity)).toFixed(3)}g</Text>
+              </View>
+              <Text style={styles.dividerDotted}>................................</Text>
+              <View style={styles.row}><Text style={styles.mono}>Old Balance (Before):</Text><Text style={styles.mono}>{Number(oldBalanceBefore).toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Advance Balance (Before):</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.monoBold}>Old Balance (After):</Text><Text style={styles.monoBold}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.monoBold}>Advance Balance (After):</Text><Text style={styles.monoBold}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
+            </>
+          ) : isGramOnly ? (
             <>
               <View style={styles.row}><Text style={styles.mono}>Issue Gram:</Text><Text style={styles.mono}>{issueTotalPurity.toFixed(3)}g</Text></View>
               <View style={styles.row}><Text style={styles.mono}>Receipt Gram:</Text><Text style={styles.mono}>- {receiptTotalPurity.toFixed(3)}g</Text></View>
@@ -376,22 +492,31 @@ export default function BillPreviewScreen({ navigation, route }) {
             </>
           )}
 
-          <Text style={styles.divider}>--------------------------------</Text>
-          <Text style={styles.sectionTitle}>TRANSACTION SUMMARY</Text>
-          {!isGramOnly && (
+          {!isPlusBill && (
             <>
-              <View style={styles.row}><Text style={styles.mono}>Converted Gram:</Text><Text style={styles.mono}>{Number(convertedGram).toFixed(3)}g</Text></View>
-              {((transaction.outstandingAmount || (finalAmount - collectedAmount)) > 0) && (
-                <View style={styles.row}>
-                  <Text style={styles.monoBold}>Outstanding Gram:</Text>
-                  <Text style={[styles.monoBold, {color:'#D32F2F'}]}>{(transaction.outstandingGram || (Math.max(0, finalAmount - collectedAmount) / goldRate)).toFixed(3)}g</Text>
-                </View>
+              <Text style={styles.divider}>--------------------------------</Text>
+              <Text style={styles.sectionTitle}>TRANSACTION SUMMARY</Text>
+              {!isGramOnly && (
+                <>
+                  <View style={styles.row}><Text style={styles.mono}>Converted Gram:</Text><Text style={styles.mono}>{Number(convertedGram).toFixed(3)}g</Text></View>
+                  {((transaction.outstandingAmount || (finalAmount - collectedAmount)) > 0) && (
+                    <View style={styles.row}>
+                      <Text style={styles.monoBold}>Outstanding Gram:</Text>
+                      <Text style={[styles.monoBold, {color:'#D32F2F'}]}>
+                        {safeNumber(transaction.outstandingGram != null
+                          ? transaction.outstandingGram
+                          : (goldRate ? Math.max(0, finalAmount - collectedAmount) / goldRate : 0)
+                        ).toFixed(3)}g
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
+              <View style={styles.row}><Text style={styles.mono}>New Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
+              {!isGramOnly && (
+                <View style={styles.row}><Text style={styles.mono}>New Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
               )}
             </>
-          )}
-          <View style={styles.row}><Text style={styles.mono}>New Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
-          {!isGramOnly && (
-            <View style={styles.row}><Text style={styles.mono}>New Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
           )}
 
           <Text style={styles.divider}>--------------------------------</Text>
@@ -583,13 +708,106 @@ export default function BillPreviewScreen({ navigation, route }) {
 
       {/* Sticky Bottom Actions */}
       <View style={styles.actionsContainer}>
-        {isPreviewMode ? (
+        {isPreviewMode && isWastage ? (
+          <View>
+            <View style={[styles.actionsBar, { marginBottom: 8 }]}>
+              <TouchableOpacity
+                style={[
+                  styles.actionBtn,
+                  { backgroundColor: '#2E7D32' },
+                  selectedPaymentOption === 'COLLECT_CASH' && styles.actionBtnSelected,
+                  (saving || printing || sharing) && { opacity: 0.6 },
+                ]}
+                disabled={saving || printing || sharing}
+                onPress={() => setSelectedPaymentOption('COLLECT_CASH')}
+              >
+                <MaterialCommunityIcons
+                  name={selectedPaymentOption === 'COLLECT_CASH' ? 'check-circle' : 'cash-check'}
+                  size={18}
+                  color="#FFF"
+                />
+                <Text style={styles.actionText}>Collect Cash</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.actionBtn,
+                  selectedPaymentOption === 'ADD_TO_BALANCE' && styles.actionBtnSelected,
+                  (saving || printing || sharing) && { opacity: 0.6 },
+                ]}
+                disabled={saving || printing || sharing}
+                onPress={() => setSelectedPaymentOption('ADD_TO_BALANCE')}
+              >
+                <MaterialCommunityIcons
+                  name={selectedPaymentOption === 'ADD_TO_BALANCE' ? 'check-circle' : 'account-cash-outline'}
+                  size={18}
+                  color="#FFF"
+                />
+                <Text style={styles.actionText}>Add to Balance</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.actionsBar, { marginBottom: 8 }]}>
+              <TouchableOpacity
+                style={[
+                  styles.actionBtn,
+                  styles.saveBillBtn,
+                  (!selectedPaymentOption || saving || printing || sharing) && { opacity: 0.5 },
+                ]}
+                disabled={!selectedPaymentOption || saving || printing || sharing}
+                onPress={handleSaveWastageBill}
+              >
+                {saving ? <ActivityIndicator size="small" color={DARK_BROWN} /> : (
+                  <>
+                    <MaterialCommunityIcons name="content-save" size={18} color={DARK_BROWN} />
+                    <Text style={[styles.actionText, { color: DARK_BROWN }]}>Save Bill</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.actionsBar}>
+              <TouchableOpacity
+                style={[styles.actionBtn, (printing || sharing || saving) && { opacity: 0.6 }]}
+                disabled={printing || sharing || saving}
+                onPress={() => withPrintLock(setPrinting, () =>
+                  PrintService.printThermal(
+                    { ...transaction, createdAt: transaction.createdAt || new Date().toISOString(), createdByName: user?.name || 'SVJ' },
+                    tamilMsg
+                  )
+                )}
+              >
+                {printing
+                  ? <ActivityIndicator size="small" color="#FFF" />
+                  : <MaterialCommunityIcons name="printer-pos" size={18} color="#FFF" />}
+                <Text style={styles.actionText}>{printing ? 'Printing…' : 'Print'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: '#25D366' }, (printing || sharing || saving) && { opacity: 0.6 }]}
+                disabled={printing || sharing || saving}
+                onPress={() => withPrintLock(setSharing, () =>
+                  PrintService.shareWhatsApp(
+                    { ...transaction, createdAt: transaction.createdAt || new Date().toISOString(), createdByName: user?.name || 'SVJ' },
+                    tamilMsg
+                  )
+                )}
+              >
+                {sharing
+                  ? <ActivityIndicator size="small" color="#FFF" />
+                  : <MaterialCommunityIcons name="whatsapp" size={18} color="#FFF" />}
+                <Text style={styles.actionText}>{sharing ? 'Sharing…' : 'WhatsApp'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : isPreviewMode ? (
           <View style={styles.actionsBar}>
             <TouchableOpacity
               style={[styles.actionBtn, { backgroundColor: '#2E7D32' }, (saving || printing || sharing) && { opacity: 0.6 }]}
               disabled={saving || printing || sharing}
               onPress={async () => {
-                if (saving) return;
+                if (savingLockRef.current) return;
+                savingLockRef.current = true;
                 setSaving(true);
                 try {
                   let res;
@@ -597,6 +815,8 @@ export default function BillPreviewScreen({ navigation, route }) {
                     res = await transactionAPI.update(transaction.editTransactionId, {
                       newIssueItems: transaction.issueItems || [],
                       newReceiptItems: transaction.receiptItems || [],
+                      newWastageProfit: transaction.wastageProfit || [],
+                      newPlusProfit: transaction.plusProfit || [],
                       receiptTotalWeight: transaction.receiptTotalWeight || 0,
                       receiptTotalAmount: transaction.receiptTotalAmount || 0,
                       collectedAmount: transaction.collectedAmount || 0,
@@ -620,6 +840,7 @@ export default function BillPreviewScreen({ navigation, route }) {
                 } catch (err) {
                   console.error(err);
                   Alert.alert('Error', err.response?.data?.message || 'Failed to save transaction.');
+                  savingLockRef.current = false;
                 } finally {
                   setSaving(false);
                 }
@@ -628,7 +849,7 @@ export default function BillPreviewScreen({ navigation, route }) {
               {saving ? <ActivityIndicator size="small" color="#FFF" /> : (
                 <>
                   <MaterialCommunityIcons name="content-save" size={18} color="#FFF" />
-                  <Text style={styles.actionText}>Save</Text>
+                  <Text style={styles.actionText}>Save Bill</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -666,30 +887,42 @@ export default function BillPreviewScreen({ navigation, route }) {
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.actionsBar}>
-            <TouchableOpacity 
-              style={[styles.actionBtn, (printing || sharing) && { opacity: 0.6 }]} 
-              disabled={printing || sharing}
-              onPress={() => withPrintLock(setPrinting, () => PrintService.printThermal({ ...transaction, createdByName: user?.name || 'SVJ' }, tamilMsg).then(() => {
-                try { transactionAPI.markPrinted(transaction._id); } catch(e){}
-              }))}
-            >
-              {printing
-                ? <ActivityIndicator size="small" color="#FFF" />
-                : <MaterialCommunityIcons name="printer-pos" size={20} color="#FFF" />}
-              <Text style={styles.actionText}>{printing ? 'Printing…' : 'Print Bill'}</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.actionBtn, {backgroundColor: '#25D366'}, (printing || sharing) && { opacity: 0.6 }]} 
-              disabled={printing || sharing}
-              onPress={() => withPrintLock(setSharing, () => PrintService.shareWhatsApp({ ...transaction, createdByName: user?.name || 'SVJ' }, tamilMsg))}
-            >
-              {sharing
-                ? <ActivityIndicator size="small" color="#FFF" />
-                : <MaterialCommunityIcons name="whatsapp" size={20} color="#FFF" />}
-              <Text style={styles.actionText}>{sharing ? 'Sharing…' : 'WhatsApp'}</Text>
-            </TouchableOpacity>
+          <View>
+            <View style={[styles.actionsBar, { marginBottom: 8 }]}>
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: GOLD }]}
+                onPress={handleEditBill}
+              >
+                <MaterialCommunityIcons name="pencil-outline" size={20} color={DARK_BROWN} />
+                <Text style={[styles.actionText, { color: DARK_BROWN }]}>Edit Bill</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.actionsBar}>
+              <TouchableOpacity
+                style={[styles.actionBtn, (printing || sharing) && { opacity: 0.6 }]}
+                disabled={printing || sharing}
+                onPress={() => withPrintLock(setPrinting, () => PrintService.printThermal({ ...transaction, createdByName: user?.name || 'SVJ' }, tamilMsg).then(() => {
+                  try { transactionAPI.markPrinted(transaction._id); } catch(e){}
+                }))}
+              >
+                {printing
+                  ? <ActivityIndicator size="small" color="#FFF" />
+                  : <MaterialCommunityIcons name="printer-pos" size={20} color="#FFF" />}
+                <Text style={styles.actionText}>{printing ? 'Printing…' : 'Print Bill'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionBtn, {backgroundColor: '#25D366'}, (printing || sharing) && { opacity: 0.6 }]}
+                disabled={printing || sharing}
+                onPress={() => withPrintLock(setSharing, () => PrintService.shareWhatsApp({ ...transaction, createdByName: user?.name || 'SVJ' }, tamilMsg))}
+              >
+                {sharing
+                  ? <ActivityIndicator size="small" color="#FFF" />
+                  : <MaterialCommunityIcons name="whatsapp" size={20} color="#FFF" />}
+                <Text style={styles.actionText}>{sharing ? 'Sharing…' : 'WhatsApp'}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </View>
@@ -766,6 +999,8 @@ const styles = StyleSheet.create({
   actionsContainer: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFF', padding: 12, elevation: 10, borderTopWidth: 1, borderColor: '#EEE' },
   actionsBar: { flexDirection: 'row', justifyContent: 'space-around' },
   actionBtn: { flex: 1, backgroundColor: DARK_BROWN, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, marginHorizontal: 4, borderRadius: 8, gap: 6 },
+  actionBtnSelected: { borderWidth: 2, borderColor: '#FFF' },
+  saveBillBtn: { backgroundColor: GOLD },
   saveBtn: { backgroundColor: DARK_BROWN, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 8, gap: 6 },
   actionText: { color: '#FFF', fontWeight: '700', fontSize: 13 },
 

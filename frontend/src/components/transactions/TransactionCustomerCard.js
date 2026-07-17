@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { resolveDisplayBalance } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -18,6 +19,15 @@ export default function TransactionCustomerCard({ customer, onPress }) {
     ? new Date(lastTransactionDate).toLocaleDateString()
     : 'N/A';
 
+  // Show only one balance at a time — whichever is currently owed/credited.
+  // A negative Old Balance is converted into an Advance instead of ever being shown.
+  const { label: balanceLabel, value: balanceValue } = resolveDisplayBalance(oldBalance, advance);
+  const balanceStyle = balanceLabel === 'Old Balance'
+    ? styles.balanceValRed
+    : balanceLabel === 'Advance'
+    ? styles.balanceValGreen
+    : styles.balanceValNeutral;
+
   return (
     <TouchableOpacity
       style={styles.card}
@@ -34,21 +44,19 @@ export default function TransactionCustomerCard({ customer, onPress }) {
           <View>
             <Text style={styles.nameText}>{customerName}</Text>
             <Text style={styles.phoneText}>+91 {phoneNumber}</Text>
+            {customer.customerCategory ? (
+              <Text style={styles.categoryText}>
+                {customer.customerCategory === 'WASTAGE' ? 'Wastage Customer' : 'Plus Customer'}
+              </Text>
+            ) : null}
           </View>
         </View>
 
         <View style={styles.balanceRow}>
           <View style={styles.balanceItem}>
-            <Text style={styles.balanceLabel}>Old Balance</Text>
-            <Text style={styles.balanceValRed}>
-              ₹{Number(oldBalance || 0).toLocaleString('en-IN')}
-            </Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.balanceItem}>
-            <Text style={styles.balanceLabel}>Advance</Text>
-            <Text style={styles.balanceValGreen}>
-              ₹{Number(advance || 0).toLocaleString('en-IN')}
+            <Text style={styles.balanceLabel}>{balanceLabel}</Text>
+            <Text style={balanceStyle}>
+              ₹{balanceValue.toLocaleString('en-IN')}
             </Text>
           </View>
         </View>
@@ -115,6 +123,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 2,
   },
+  categoryText: {
+    fontSize: 10,
+    color: GOLD,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginTop: 2,
+  },
   balanceRow: {
     flexDirection: 'row',
     backgroundColor: '#FCFAF5',
@@ -126,11 +142,6 @@ const styles = StyleSheet.create({
   },
   balanceItem: {
     flex: 1,
-  },
-  divider: {
-    width: 1,
-    backgroundColor: '#E5D8C0',
-    marginHorizontal: 12,
   },
   balanceLabel: {
     fontSize: 10,
@@ -148,6 +159,12 @@ const styles = StyleSheet.create({
   balanceValGreen: {
     fontSize: 14,
     color: '#2E7D32',
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  balanceValNeutral: {
+    fontSize: 14,
+    color: DARK_BROWN,
     fontWeight: '800',
     marginTop: 2,
   },

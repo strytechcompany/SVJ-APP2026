@@ -4,6 +4,16 @@ const Customer = require('../models/Customer');
 const StockMovement = require('../models/StockMovement');
 const ReceivedInventory = require('../models/ReceivedInventory');
 const cashLedgerController = require('./cashLedgerController');
+const { safeNumber } = require('../utils/safeNumber');
+
+// Guards Cash fields (amount/rate on issue & receipt items) against Infinity/-Infinity/NaN
+// before they ever reach MongoDB.
+const sanitizeCashItems = (items) =>
+  (items || []).map(item => ({
+    ...item,
+    ...(item.amount !== undefined && { amount: safeNumber(item.amount) }),
+    ...(item.rate !== undefined && { rate: safeNumber(item.rate) }),
+  }));
 
 exports.createTransaction = async (req, res) => {
   try {
@@ -11,6 +21,7 @@ exports.createTransaction = async (req, res) => {
       transactionType,
       transactionSubtype,
       customerId,
+      commonBillNo,
       issueItems,
       receiptItems,
       paymentDetails,
@@ -24,9 +35,12 @@ exports.createTransaction = async (req, res) => {
       finalAmount,
       balanceAmount,
       isWastage,
+      wastageProfit,
+      plusProfit,
       goldRate,
       description,
       paymentMode,
+      paymentOption,
       goldPaymentWeight,
       goldPaymentPurity,
       goldConvertedAmount,
@@ -41,37 +55,53 @@ exports.createTransaction = async (req, res) => {
       status,
     } = req.body;
 
+    // Guard against duplicate bills — Bill Number is the unique identifier for a
+    // saved bill. If a transaction with this exact commonBillNo already exists
+    // (e.g. a retried request or a double-tap that slipped past the client-side
+    // save lock), return it as-is instead of creating a second document and
+    // re-applying stock/ledger/balance side effects a second time.
+    if (commonBillNo) {
+      const existingByBillNo = await Transaction.findOne({ commonBillNo });
+      if (existingByBillNo) {
+        return res.status(200).json({ success: true, data: existingByBillNo });
+      }
+    }
+
     // 1. Create the transaction
     const newTransaction = await Transaction.create({
       transactionType,
       transactionSubtype,
       customerId,
-      issueItems,
-      receiptItems,
+      commonBillNo,
+      issueItems: sanitizeCashItems(issueItems),
+      receiptItems: sanitizeCashItems(receiptItems),
       paymentDetails,
       gstDetails,
       issueTotalWeight,
       issueTotalPurity,
-      issueTotalAmount,
+      issueTotalAmount: safeNumber(issueTotalAmount),
       receiptTotalWeight,
       receiptTotalPurity,
-      receiptTotalAmount,
-      finalAmount,
+      receiptTotalAmount: safeNumber(receiptTotalAmount),
+      finalAmount: safeNumber(finalAmount),
       balanceAmount,
       isWastage,
+      wastageProfit,
+      plusProfit,
       goldRate,
       description,
       paymentMode,
+      paymentOption,
       goldPaymentWeight,
       goldPaymentPurity,
       goldConvertedAmount,
       oldBalanceBefore,
-      oldBalanceAfter,
+      oldBalanceAfter: safeNumber(oldBalanceAfter),
       advanceBalanceBefore,
       advanceBalanceAfter,
       convertedGram,
-      collectedAmount,
-      outstandingAmount,
+      collectedAmount: safeNumber(collectedAmount),
+      outstandingAmount: safeNumber(outstandingAmount),
       outstandingGram,
       status,
     });
@@ -231,7 +261,7 @@ exports.getAllTransactions = async (req, res) => {
 exports.getRecentTransactions = async (req, res) => {
   try {
     const transactions = await Transaction.find()
-      .populate('customerId', 'customerName phoneNumber customerType')
+      .populate('customerId', 'customerName phoneNumber customerType oldBalance advance')
       .sort({ createdAt: -1 })
       .limit(10);
     res.json({ success: true, data: transactions });
@@ -247,10 +277,11 @@ exports.updateTransaction = async (req, res) => {
     if (!transaction) return res.status(404).json({ success: false, message: 'Transaction not found' });
 
     const {
-      newIssueItems, newReceiptItems,
+      newIssueItems, newReceiptItems, newWastageProfit, newPlusProfit,
       receiptTotalWeight: newReceiptTotalWeight, receiptTotalAmount: newReceiptTotalAmount,
       collectedAmount: newCollectedAmount,
       paymentMode: newPaymentMode, paymentDetails: newPaymentDetails,
+      paymentOption: newPaymentOption,
       goldPaymentWeight: newGoldPaymentWeight, goldPaymentPurity: newGoldPaymentPurity,
       goldConvertedAmount: newGoldConvertedAmount, convertedGram: newConvertedGram,
     } = req.body;
@@ -260,6 +291,10 @@ exports.updateTransaction = async (req, res) => {
     if (newReceiptItems !== undefined && !Array.isArray(newReceiptItems)) {
       return res.status(400).json({ success: false, message: 'newReceiptItems must be an array' });
     }
+
+    // Guard Cash fields (amount/rate) against Infinity/-Infinity/NaN before any downstream math or save.
+    const sanitizedNewIssueItems = sanitizeCashItems(newIssueItems);
+    const sanitizedNewReceiptItems = newReceiptItems !== undefined ? sanitizeCashItems(newReceiptItems) : undefined;
 
     // Build maps keyed by stockId string for comparison
     const oldMap = new Map();
@@ -313,9 +348,9 @@ exports.updateTransaction = async (req, res) => {
     }
 
     // Recalculate totals from new items
-    const newIssueTotalWeight = parseFloat(newIssueItems.reduce((s, i) => s + (i.weight || 0), 0).toFixed(3));
-    const newIssueTotalPurity = parseFloat(newIssueItems.reduce((s, i) => s + (i.purity || 0), 0).toFixed(3));
-    const newIssueTotalAmount = parseFloat(newIssueItems.reduce((s, i) => s + (i.amount || 0), 0).toFixed(2));
+    const newIssueTotalWeight = parseFloat(sanitizedNewIssueItems.reduce((s, i) => s + (i.weight || 0), 0).toFixed(3));
+    const newIssueTotalPurity = parseFloat(sanitizedNewIssueItems.reduce((s, i) => s + (i.purity || 0), 0).toFixed(3));
+    const newIssueTotalAmount = safeNumber(parseFloat(sanitizedNewIssueItems.reduce((s, i) => s + safeNumber(i.amount), 0).toFixed(2)));
 
     // Recalculate GST if it was active
     let newGstDetails = transaction.gstDetails?.toObject ? transaction.gstDetails.toObject() : transaction.gstDetails;
@@ -327,16 +362,65 @@ exports.updateTransaction = async (req, res) => {
       newGstDetails = { ...newGstDetails, cgstAmount, sgstAmount };
     }
 
-    const receiptTotal = newReceiptItems !== undefined
+    const receiptTotal = safeNumber(newReceiptItems !== undefined
       ? (newReceiptTotalAmount || 0)
-      : (transaction.receiptTotalAmount || 0);
-    const collected = newCollectedAmount !== undefined ? newCollectedAmount : (transaction.collectedAmount || 0);
-    const newFinalAmount = parseFloat((newIssueTotalAmount + gstTotal - receiptTotal).toFixed(2));
-    const newOutstandingAmount = parseFloat(Math.max(0, newFinalAmount - collected).toFixed(2));
-    const newOldBalanceAfter = parseFloat(((transaction.oldBalanceBefore || 0) + newOutstandingAmount).toFixed(2));
+      : (transaction.receiptTotalAmount || 0));
+    let collected = safeNumber(newCollectedAmount !== undefined ? newCollectedAmount : (transaction.collectedAmount || 0));
+    const newFinalAmount = safeNumber(parseFloat((newIssueTotalAmount + gstTotal - receiptTotal).toFixed(2)));
+
+    // Plus bills (B2C, not Wastage) settle in Pure grams via Old Balance/Advance — Case 1/2/3.
+    // Wastage bills settle via an explicit Collect Cash / Add to Balance choice (direct ₹, no gold-rate conversion).
+    // Every other flow settles in cash via the generic outstanding-amount math below.
+    const isPlusBill = transaction.transactionType === 'B2C' && !transaction.isWastage;
+    const isWastageBillWithPaymentOption = transaction.isWastage && !!newPaymentOption;
+    const effectiveReceiptItemsForPurity = sanitizedNewReceiptItems !== undefined ? sanitizedNewReceiptItems : (transaction.receiptItems || []);
+    const newReceiptTotalPurity = parseFloat(effectiveReceiptItemsForPurity.reduce((s, i) => s + (i.purity || 0), 0).toFixed(3));
+    const newGramOutstanding = parseFloat((newIssueTotalPurity - newReceiptTotalPurity).toFixed(3));
+
+    let newOutstandingAmount, newOldBalanceAfter, newAdvanceBalanceAfter, balanceDelta, advanceDelta;
+
+    if (isPlusBill) {
+      const oldBalanceBeforeVal = transaction.oldBalanceBefore || 0;
+      const advanceBalanceBeforeVal = transaction.advanceBalanceBefore || 0;
+      newOldBalanceAfter = oldBalanceBeforeVal;
+      newAdvanceBalanceAfter = advanceBalanceBeforeVal;
+      if (newGramOutstanding > 0) {
+        newOldBalanceAfter = parseFloat((oldBalanceBeforeVal + newGramOutstanding).toFixed(3));
+      } else if (newGramOutstanding < 0) {
+        newAdvanceBalanceAfter = parseFloat((advanceBalanceBeforeVal + Math.abs(newGramOutstanding)).toFixed(3));
+      }
+      newOutstandingAmount = 0;
+      balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(3));
+      advanceDelta = parseFloat((newAdvanceBalanceAfter - (transaction.advanceBalanceAfter || 0)).toFixed(3));
+    } else if (isWastageBillWithPaymentOption) {
+      if (newPaymentOption === 'COLLECT_CASH') {
+        collected = newFinalAmount;
+        newOutstandingAmount = 0;
+        newOldBalanceAfter = 0;
+      } else {
+        // ADD_TO_BALANCE: Final Cash becomes the customer's outstanding balance.
+        collected = 0;
+        newOutstandingAmount = newFinalAmount;
+        newOldBalanceAfter = safeNumber(parseFloat(((transaction.oldBalanceBefore || 0) + newFinalAmount).toFixed(2)));
+      }
+      newAdvanceBalanceAfter = transaction.advanceBalanceAfter;
+      balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(2));
+      advanceDelta = 0;
+    } else {
+      newOutstandingAmount = safeNumber(parseFloat(Math.max(0, newFinalAmount - collected).toFixed(2)));
+      newOldBalanceAfter = safeNumber(parseFloat(((transaction.oldBalanceBefore || 0) + newOutstandingAmount).toFixed(2)));
+      newAdvanceBalanceAfter = transaction.advanceBalanceAfter;
+      balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(2));
+      advanceDelta = 0;
+    }
+
+    const newStatus = isPlusBill
+      ? (newGramOutstanding > 0 ? 'PARTIAL' : 'PAID')
+      : isWastageBillWithPaymentOption
+      ? (newPaymentOption === 'COLLECT_CASH' ? 'PAID' : 'PARTIAL')
+      : (newOutstandingAmount <= 0 ? 'PAID' : 'PARTIAL');
 
     // Delta for customer balance
-    const balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(2));
     const purchaseDelta = parseFloat((newIssueTotalAmount - (transaction.issueTotalAmount || 0)).toFixed(2));
 
     // Recompute transactionSubtype to reflect the new item mix
@@ -357,23 +441,28 @@ exports.updateTransaction = async (req, res) => {
       req.params.id,
       {
         $set: {
-          issueItems: newIssueItems,
+          issueItems: sanitizedNewIssueItems,
           issueTotalWeight: newIssueTotalWeight,
           issueTotalPurity: newIssueTotalPurity,
           issueTotalAmount: newIssueTotalAmount,
-          ...(newReceiptItems !== undefined && {
-            receiptItems: newReceiptItems,
+          ...(sanitizedNewReceiptItems !== undefined && {
+            receiptItems: sanitizedNewReceiptItems,
             receiptTotalWeight: newReceiptTotalWeight || 0,
-            receiptTotalAmount: newReceiptTotalAmount || 0,
+            receiptTotalAmount: safeNumber(newReceiptTotalAmount || 0),
           }),
+          receiptTotalPurity: newReceiptTotalPurity,
+          ...(newWastageProfit !== undefined && { wastageProfit: newWastageProfit }),
+          ...(newPlusProfit !== undefined && { plusProfit: newPlusProfit }),
           transactionSubtype: newSubtype,
           finalAmount: newFinalAmount,
           collectedAmount: collected,
           outstandingAmount: newOutstandingAmount,
           oldBalanceAfter: newOldBalanceAfter,
+          advanceBalanceAfter: newAdvanceBalanceAfter,
           gstDetails: newGstDetails,
-          status: newOutstandingAmount <= 0 ? 'PAID' : 'PARTIAL',
+          status: newStatus,
           ...(newPaymentMode !== undefined && { paymentMode: newPaymentMode }),
+          ...(newPaymentOption !== undefined && { paymentOption: newPaymentOption }),
           ...(newPaymentDetails !== undefined && { paymentDetails: newPaymentDetails }),
           ...(newGoldPaymentWeight !== undefined && { goldPaymentWeight: newGoldPaymentWeight }),
           ...(newGoldPaymentPurity !== undefined && { goldPaymentPurity: newGoldPaymentPurity }),
@@ -385,9 +474,9 @@ exports.updateTransaction = async (req, res) => {
     );
 
     // Apply delta to customer
-    if (Math.abs(balanceDelta) > 0.001 || Math.abs(purchaseDelta) > 0.001) {
+    if (Math.abs(balanceDelta) > 0.001 || Math.abs(advanceDelta) > 0.001 || Math.abs(purchaseDelta) > 0.001) {
       await Customer.findByIdAndUpdate(transaction.customerId, {
-        $inc: { oldBalance: balanceDelta, totalPurchaseAmount: purchaseDelta },
+        $inc: { oldBalance: balanceDelta, advance: advanceDelta, totalPurchaseAmount: purchaseDelta },
       });
     }
 
@@ -447,11 +536,13 @@ exports.deleteTransaction = async (req, res) => {
 
     // 3. Reverse this transaction's impact on customer balance
     const balanceImpact = parseFloat(((transaction.oldBalanceAfter || 0) - (transaction.oldBalanceBefore || 0)).toFixed(2));
+    const advanceImpact = parseFloat(((transaction.advanceBalanceAfter || 0) - (transaction.advanceBalanceBefore || 0)).toFixed(2));
     const customerInc = {
       transactionCount: -1,
       totalPurchaseAmount: -(transaction.issueTotalAmount || 0),
       totalReceiptAmount: -(transaction.receiptTotalAmount || 0),
       oldBalance: -balanceImpact,
+      advance: -advanceImpact,
     };
     await Customer.findByIdAndUpdate(transaction.customerId, { $inc: customerInc });
 
