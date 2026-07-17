@@ -149,6 +149,7 @@ export const stockAPI = {
   getByBarcode: (barcode) => api.get(`/stock/barcode/${barcode}`),
   update: (id, data) => api.put(`/stock/update/${id}`, data),
   remove: (id) => api.delete(`/stock/delete/${id}`),
+  removeGroup: (designName) => api.delete(`/stock/delete-group/${encodeURIComponent(designName)}`),
 };
 
 export const customerAPI = {

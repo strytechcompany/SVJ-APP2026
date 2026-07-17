@@ -409,3 +409,61 @@ exports.deleteStock = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error deleting stock' });
   }
 };
+
+// ─── Delete Stock Group (all records under a Design Name) ────────────────────
+exports.deleteStockGroup = async (req, res) => {
+  try {
+    const designNameParam = String(req.params.designName || '').trim();
+    if (!designNameParam) {
+      return res.status(400).json({ success: false, message: 'Design name is required' });
+    }
+
+    const stocks = await Stock.find({
+      $expr: {
+        $eq: [
+          { $toUpper: { $trim: { input: '$designName' } } },
+          designNameParam.toUpperCase(),
+        ],
+      },
+    });
+
+    if (stocks.length === 0) {
+      return res.status(404).json({ success: false, message: 'Stock design not found' });
+    }
+
+    const stockIds = stocks.map((s) => s._id);
+
+    const Transaction = require('../models/Transaction');
+    const LineStockTransaction = require('../models/LineStockTransaction');
+    const LineStockSettlement = require('../models/LineStockSettlement');
+
+    const [txnRef, lineRef, settlementRef] = await Promise.all([
+      Transaction.exists({ 'issueItems.stockId': { $in: stockIds } }),
+      LineStockTransaction.exists({ 'issuedProducts.stockId': { $in: stockIds } }),
+      LineStockSettlement.exists({
+        $or: [
+          { 'soldItems.stockId': { $in: stockIds } },
+          { 'returnedItems.stockId': { $in: stockIds } },
+        ],
+      }),
+    ]);
+
+    if (txnRef || lineRef || settlementRef) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete — some items in this design are linked to existing transactions. Contact admin to resolve.',
+      });
+    }
+
+    const StockMovement = require('../models/StockMovement');
+    await Promise.all([
+      StockMovement.deleteMany({ stockId: { $in: stockIds } }),
+      Stock.deleteMany({ _id: { $in: stockIds } }),
+    ]);
+
+    res.json({ success: true, message: 'Stock deleted successfully', deletedCount: stockIds.length });
+  } catch (error) {
+    console.error('deleteStockGroup error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error deleting stock' });
+  }
+};

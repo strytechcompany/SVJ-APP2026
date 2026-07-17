@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { useStock } from '../../context/StockContext';
+import { useAuth } from '../../context/AuthContext';
 import SummaryCards from '../../components/stock/SummaryCards';
 import CategoryFilter from '../../components/stock/CategoryFilter';
 import StockSearchBar from '../../components/stock/StockSearchBar';
@@ -28,13 +29,16 @@ export default function StockManagementScreen({ navigation }) {
 
   const {
     stocks, summary, pagination, searchQuery, setSearchQuery, selectedCategory, setSelectedCategory,
-    fetchStocks, fetchSummary, loadMoreStocks, deleteStock,
-    
+    fetchStocks, fetchSummary, loadMoreStocks, deleteStock, deleteStockGroup,
+
     receivedInventory, receivedSummary, receivedPagination, receivedFilter, setReceivedFilter,
     fetchReceivedInventory, fetchReceivedSummary, loadMoreReceived,
 
     loading, refreshing, error, onRefresh
   } = useStock();
+
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'SuperAdmin' || user?.role === 'Admin';
 
   // Refresh every time this screen comes into focus (e.g., after a bill edit restores stock)
   useFocusEffect(
@@ -86,8 +90,12 @@ export default function StockManagementScreen({ navigation }) {
   }, [searchQuery]);
 
   const handleDelete = useCallback(async (id) => {
-    try { await deleteStock(id); } 
-    catch { Alert.alert('Error', 'Failed to delete item.'); }
+    try {
+      await deleteStock(id);
+      Alert.alert('Success', 'Stock item deleted successfully.');
+    } catch {
+      Alert.alert('Error', 'Failed to delete stock item. Please try again.');
+    }
   }, [deleteStock]);
 
   const handleItemPress = useCallback((item) => {
@@ -97,6 +105,19 @@ export default function StockManagementScreen({ navigation }) {
   const handleEdit = useCallback((item) => {
     navigation.navigate('AddStock', { editItem: item });
   }, [navigation]);
+
+  const handleDeleteGroup = useCallback(async (designName) => {
+    try {
+      const res = await deleteStockGroup(designName);
+      if (res.success) {
+        Alert.alert('Success', 'Stock deleted successfully.');
+      } else {
+        Alert.alert('Error', res.message || 'Failed to delete stock. Please try again.');
+      }
+    } catch {
+      Alert.alert('Error', 'Failed to delete stock. Please try again.');
+    }
+  }, [deleteStockGroup]);
 
   // --- Received Handlers ---
   const handleFilterSelect = useCallback((f) => {
@@ -217,6 +238,8 @@ export default function StockManagementScreen({ navigation }) {
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onItemPress={handleItemPress}
+                isAdmin={isAdmin}
+                onDeleteGroup={handleDeleteGroup}
               />
             )}
             contentContainerStyle={styles.listContent}
