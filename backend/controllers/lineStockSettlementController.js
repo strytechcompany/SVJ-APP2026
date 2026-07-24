@@ -13,7 +13,8 @@ exports.createSettlement = async (req, res) => {
       soldItems,
       returnedItems,
       paymentDetails,
-      remarks
+      remarks,
+      billStyle
     } = req.body;
 
     const customer = await Customer.findById(customerId);
@@ -75,6 +76,7 @@ exports.createSettlement = async (req, res) => {
       settlement.remarks = remarks;
       settlement.status = status;
       settlement.isDraft = false;
+      if (billStyle !== undefined) settlement.billStyle = billStyle;
       settlement.settledBy = req.user?.name || req.user?.email || 'System';
       await settlement.save();
     } else {
@@ -90,6 +92,7 @@ exports.createSettlement = async (req, res) => {
         remarks,
         status,
         isDraft: false,
+        billStyle,
         settledBy: req.user?.name || req.user?.email || 'System',
         createdBy: req.user._id,
       });
@@ -233,6 +236,84 @@ exports.getDraftSettlement = async (req, res) => {
   } catch (error) {
     console.error('getDraftSettlement error:', error);
     res.status(500).json({ success: false, message: 'Server error fetching draft settlement' });
+  }
+};
+
+// ─── Update Bill Style (Plus/Wastage print layout) + Remarks ──────────────────
+// Purely presentational — never touches stock, balance, or any saved
+// calculation.
+exports.updateBillStyle = async (req, res) => {
+  try {
+    const { billStyle, remarks } = req.body;
+    if (billStyle !== undefined && billStyle !== null && !['PLUS', 'WASTAGE'].includes(billStyle)) {
+      return res.status(400).json({ success: false, message: 'billStyle must be PLUS or WASTAGE' });
+    }
+    const settlement = await LineStockSettlement.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          ...(billStyle !== undefined && { billStyle }),
+          ...(remarks !== undefined && { remarks }),
+        },
+      },
+      { new: true }
+    );
+    if (!settlement) {
+      return res.status(404).json({ success: false, message: 'Settlement not found' });
+    }
+    res.json({ success: true, data: settlement });
+  } catch (error) {
+    console.error('updateBillStyle error:', error);
+    res.status(500).json({ success: false, message: 'Server error updating bill style' });
+  }
+};
+
+// ─── Save the PLUS Bill structure ─────────────────────────────────────────────
+// A self-contained, gram-based bill view built on top of the real settlement.
+// Purely additive — never touches soldItems, returnedItems, finalBalance,
+// advanceBalance, or the real customer balance (already applied by createSettlement).
+exports.savePlusBill = async (req, res) => {
+  try {
+    const { plusBill } = req.body;
+    if (!plusBill) {
+      return res.status(400).json({ success: false, message: 'plusBill is required' });
+    }
+    const settlement = await LineStockSettlement.findByIdAndUpdate(
+      req.params.id,
+      { $set: { billStyle: 'PLUS', plusBill } },
+      { new: true }
+    ).populate('customerId').populate('lineStockTransactionId');
+    if (!settlement) {
+      return res.status(404).json({ success: false, message: 'Settlement not found' });
+    }
+    res.json({ success: true, data: settlement });
+  } catch (error) {
+    console.error('savePlusBill error:', error);
+    res.status(500).json({ success: false, message: 'Server error saving plus bill' });
+  }
+};
+
+// ─── Save the WASTAGE Bill structure ──────────────────────────────────────────
+// A self-contained, cash-based bill view (Weight × manually-entered Rate =
+// Cash). Same additive guarantee as savePlusBill.
+exports.saveWastageBill = async (req, res) => {
+  try {
+    const { wastageBill } = req.body;
+    if (!wastageBill) {
+      return res.status(400).json({ success: false, message: 'wastageBill is required' });
+    }
+    const settlement = await LineStockSettlement.findByIdAndUpdate(
+      req.params.id,
+      { $set: { billStyle: 'WASTAGE', wastageBill } },
+      { new: true }
+    ).populate('customerId').populate('lineStockTransactionId');
+    if (!settlement) {
+      return res.status(404).json({ success: false, message: 'Settlement not found' });
+    }
+    res.json({ success: true, data: settlement });
+  } catch (error) {
+    console.error('saveWastageBill error:', error);
+    res.status(500).json({ success: false, message: 'Server error saving wastage bill' });
   }
 };
 

@@ -166,6 +166,8 @@ export const transactionAPI = {
   create: (data) => api.post('/transactions/create', data),
   getAll: (params) => api.get('/transactions/all', { params }),
   getRecent: () => api.get('/transactions/recent'),
+  getNextBillNumber: (category) => api.get('/transactions/next-bill-number', { params: { category } }),
+  getUpcomingReminders: () => api.get('/transactions/reminders/upcoming'),
   getById: (id) => api.get(`/transactions/${id}`),
   getByCustomer: (customerId) => api.get(`/transactions/customer/${customerId}`),
   markPrinted: (id) => api.post(`/transactions/${id}/print`),
@@ -197,6 +199,11 @@ export const lineStockAPI = {
   saveSoldItem: (data) => api.post('/linestock/settlement/sold-item', data),
   getDraftSettlement: (lineStockTransactionId) => api.get(`/linestock/settlement/draft/${lineStockTransactionId}`),
   deleteSoldItem: (lineStockTransactionId, stockId) => api.delete(`/linestock/settlement/draft/${lineStockTransactionId}/sold-item/${stockId}`),
+  updateBillStyle: (id, data) => api.put(`/linestock/${id}/bill-style`, data),
+  saveWastageBill: (id, wastageBill) => api.put(`/linestock/${id}/wastage-bill`, { wastageBill }),
+  updateSettlementBillStyle: (id, data) => api.put(`/linestock/settlement/${id}/bill-style`, data),
+  saveSettlementPlusBill: (id, plusBill) => api.put(`/linestock/settlement/${id}/plus-bill`, { plusBill }),
+  saveSettlementWastageBill: (id, wastageBill) => api.put(`/linestock/settlement/${id}/wastage-bill`, { wastageBill }),
 };
 
 export const orderAPI = {
@@ -204,6 +211,7 @@ export const orderAPI = {
   getAll: (params) => api.get('/orders/all', { params }),
   getById: (id) => api.get(`/orders/${id}`),
   updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
+  updateBillStyle: (id, data) => api.put(`/orders/${id}/bill-style`, data),
   remove: (id) => api.delete(`/orders/${id}`),
 };
 

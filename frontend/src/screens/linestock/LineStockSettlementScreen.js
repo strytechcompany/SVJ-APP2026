@@ -41,6 +41,10 @@ export default function LineStockSettlementScreen({ route, navigation }) {
   const [goldPayment, setGoldPayment] = useState('');
   const [remarks, setRemarks] = useState('');
 
+  // Bill Style (Plus/Wastage print layout) — purely presentational, chosen
+  // before saving so the settlement remembers it once created.
+  const [billStyle, setBillStyle] = useState(null);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -183,6 +187,10 @@ export default function LineStockSettlementScreen({ route, navigation }) {
 
   // Submission
   const handleSettle = async (action = 'save') => {
+    if (!billStyle) {
+      Alert.alert('Bill Type Required', 'Please select a Bill Type.');
+      return;
+    }
     if (pendingItems.length > 0) {
       Alert.alert(
         'Partial Settlement',
@@ -232,13 +240,14 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           gold: parseFloat(goldPayment) || 0,
           receivedGram: 0
         },
-        remarks
+        remarks,
+        billStyle
       };
 
       const res = await lineStockAPI.settleStock(payload);
       if (res.data.success) {
         if (action === 'print') {
-          await LineStockSettlementPrintService.printBill(res.data.data);
+          await LineStockSettlementPrintService.printBill({ ...res.data.data, billStyle });
           navigation.navigate('LineStockDashboard');
         } else {
           Alert.alert('Settled', 'Settlement completed successfully!', [
@@ -412,6 +421,25 @@ export default function LineStockSettlementScreen({ route, navigation }) {
             value={remarks}
             onChangeText={setRemarks}
           />
+        </View>
+
+        {/* Bill Type — required before Save/Print, purely for print layout */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Bill Type (Required)</Text>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <TouchableOpacity
+              style={[styles.actionBtnSm, { flex: 1, paddingVertical: 10, backgroundColor: billStyle === 'PLUS' ? GOLD : '#F0E4CC' }]}
+              onPress={() => setBillStyle('PLUS')}
+            >
+              <Text style={[styles.actionBtnText, { color: DARK_BROWN, textAlign: 'center' }]}>Plus Bill</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionBtnSm, { flex: 1, paddingVertical: 10, backgroundColor: billStyle === 'WASTAGE' ? GOLD : '#F0E4CC' }]}
+              onPress={() => setBillStyle('WASTAGE')}
+            >
+              <Text style={[styles.actionBtnText, { color: DARK_BROWN, textAlign: 'center' }]}>Wastage Bill</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Summary Table */}

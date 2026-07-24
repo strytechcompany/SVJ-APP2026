@@ -10,11 +10,15 @@ const {
   markPrinted,
   updateTransaction,
   deleteTransaction,
+  getNextBillNumber,
+  getUpcomingReminders,
 } = require('../controllers/transactionController');
 
 router.post('/create', protect, createTransaction);
 router.get('/all', protect, getAllTransactions);
 router.get('/recent', protect, getRecentTransactions);
+router.get('/next-bill-number', protect, getNextBillNumber);
+router.get('/reminders/upcoming', protect, getUpcomingReminders);
 router.get('/customer/:customerId', protect, getTransactionsByCustomer);
 router.post('/:id/print', protect, markPrinted);
 router.put('/:id', protect, updateTransaction);

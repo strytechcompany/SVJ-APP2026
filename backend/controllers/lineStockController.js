@@ -184,6 +184,77 @@ exports.issueStock = async (req, res) => {
   }
 };
 
+// ─── Update Bill Style (Plus/Wastage print layout) + Notes ────────────────────
+// Purely presentational — never touches stock, balance, or any saved
+// calculation. Allowed regardless of ACTIVE/SETTLED status, since it doesn't
+// affect the settlement math.
+exports.updateBillStyle = async (req, res) => {
+  try {
+    const { billStyle, description } = req.body;
+    if (billStyle !== undefined && billStyle !== null && !['PLUS', 'WASTAGE'].includes(billStyle)) {
+      return res.status(400).json({ success: false, message: 'billStyle must be PLUS or WASTAGE' });
+    }
+    const transaction = await LineStockTransaction.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          ...(billStyle !== undefined && { billStyle }),
+          ...(description !== undefined && { description }),
+        },
+      },
+      { new: true }
+    );
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+    res.json({ success: true, data: transaction });
+  } catch (error) {
+    console.error('updateBillStyle error:', error);
+    res.status(500).json({ success: false, message: 'Server error updating bill style' });
+  }
+};
+
+// ─── Save the WASTAGE Bill structure ──────────────────────────────────────────
+// A self-contained, cash-based bill view built on top of the real (gram-only)
+// Line Stock issue — purely additive. Never touches issuedProducts, totalGram,
+// stock, or the real oldBalanceBefore/After ledger fields; the numbers here
+// are frontend-computed (same pattern as B2C Wastage bills) and just persisted
+// as given for display/print/reopen purposes.
+exports.saveWastageBill = async (req, res) => {
+  try {
+    const { wastageBill } = req.body;
+    if (!wastageBill) {
+      return res.status(400).json({ success: false, message: 'wastageBill is required' });
+    }
+
+    const existing = await LineStockTransaction.findById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+    // Generate the Bill No once (same B2CW# sequence used by real B2C Wastage
+    // bills) — reopening/editing keeps the original number, never regenerates.
+    const billNo = existing.wastageBill?.billNo || await Transaction.generateB2CBillNumber('WASTAGE');
+
+    const transaction = await LineStockTransaction.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          billStyle: 'WASTAGE',
+          wastageBill: { ...wastageBill, billNo },
+        },
+      },
+      { new: true }
+    );
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+    res.json({ success: true, data: transaction });
+  } catch (error) {
+    console.error('saveWastageBill error:', error);
+    res.status(500).json({ success: false, message: 'Server error saving wastage bill' });
+  }
+};
+
 // ─── Update Line Stock Transaction ────────────────────────────────────────────
 // Editing is only allowed while ACTIVE — a SETTLED transaction already has a
 // linked LineStockSettlement (and customer balance changes) computed against

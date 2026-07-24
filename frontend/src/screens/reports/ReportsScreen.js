@@ -213,16 +213,16 @@ export default function ReportsScreen({ navigation }) {
         {/* SECTION 3: WASTAGE SUMMARY */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>3. WASTAGE SUMMARY TABLE</Text>
-          <View style={styles.tableHeaderRow}>
-            <Text style={[styles.tableHeader, { flex: 1 }]}>B Value</Text>
-            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'center' }]}>S Value</Text>
-            <Text style={[styles.tableHeader, { flex: 1, textAlign: 'right' }]}>Profit</Text>
-          </View>
           {data.wastageSummary.map((w, idx) => (
             <View key={idx} style={styles.tableRow}>
-              <Text style={[styles.rowValue, { flex: 1 }]}>₹{safeNumber(w.bValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-              <Text style={[styles.rowValue, { flex: 1, textAlign: 'center' }]}>₹{safeNumber(w.sValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-              <Text style={[styles.rowValue, { flex: 1, textAlign: 'right', color: '#27AE60' }]}>₹{safeNumber(w.profit).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>B.Wt: {safeNumber(w.buyingWeight).toFixed(3)}g | B%: {safeNumber(w.buyingPercent)}%</Text>
+                <Text style={styles.rowSub}>S.Wt: {safeNumber(w.sellingWeight).toFixed(3)}g | S%: {safeNumber(w.sellingPercent)}%</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.rowValue}>B: ₹{safeNumber(w.bValue).toLocaleString('en-IN', {maximumFractionDigits:2})} | S: ₹{safeNumber(w.sValue).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                <Text style={[styles.rowValue, { color: '#27AE60' }]}>Profit: ₹{safeNumber(w.profit).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
             </View>
           ))}
           <View style={styles.divider} />

@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { customerAPI, stockAPI, transactionAPI, settingsAPI } from '../../services/api';
 import { useDashboard } from '../../context/DashboardContext';
 import { useTransaction } from '../../context/TransactionContext';
@@ -13,6 +14,75 @@ import { safeNumber } from '../../utils/safeNumber';
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
 const BG = '#F8F4E8';
+
+// Applies a signed delta (cash for Wastage, Pure grams for Plus) to a customer's
+// Old Balance / Advance pair, auto-converting a sign flip instead of ever
+// leaving either value negative. Mirrors backend/controllers/transactionController.js's
+// computeSignAwareBalance so live previews here match what actually gets saved.
+const computeSignAwareBalance = (oldBefore, advanceBefore, delta) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    const newAdvance = safeNumber(advanceBefore - delta);
+    return newAdvance < 0
+      ? { oldAfter: safeNumber(Math.abs(newAdvance)), advanceAfter: 0 }
+      : { oldAfter: 0, advanceAfter: newAdvance };
+  }
+  const newOld = safeNumber(oldBefore + delta);
+  return newOld < 0
+    ? { oldAfter: 0, advanceAfter: safeNumber(advanceBefore + Math.abs(newOld)) }
+    : { oldAfter: newOld, advanceAfter: advanceBefore };
+};
+
+// Remainder Table (Wastage's Subtraction Amount / Plus's Reminder Pure): an
+// optional final adjustment subtracted from whichever balance is currently
+// active, converting a sign flip instead of ever leaving either negative.
+// A subtraction of 0 is a no-op. Mirrors the backend's applyRemainderSubtraction.
+const applyRemainderSubtraction = (oldBalance, advanceBalance, subtraction) => {
+  if (advanceBalance > 0 && oldBalance === 0) {
+    const bal = safeNumber(advanceBalance - subtraction);
+    return bal < 0
+      ? { oldBalance: safeNumber(Math.abs(bal)), advanceBalance: 0 }
+      : { oldBalance: 0, advanceBalance: bal };
+  }
+  const bal = safeNumber(oldBalance - subtraction);
+  return bal < 0
+    ? { oldBalance: 0, advanceBalance: safeNumber(advanceBalance + Math.abs(bal)) }
+    : { oldBalance: bal, advanceBalance: advanceBalance };
+};
+
+// B2D Final Balance: gram-only ledger, no cash. Case 1 (customer holds an Old
+// Balance, or neither): Final = (Old Balance + Receipt Gram) - Issue Gram.
+// Case 2 (customer holds an Advance): Final = Receipt Gram - (Advance - Issue Gram).
+// Either case auto-converts a sign flip instead of ever leaving the result negative.
+// Mirrors the backend's computeB2DBalance.
+const computeB2DBalance = (oldBefore, advanceBefore, issueGram, receiptGram) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    const final = safeNumber(receiptGram - (advanceBefore - issueGram));
+    return final < 0
+      ? { oldAfter: safeNumber(Math.abs(final)), advanceAfter: 0 }
+      : { oldAfter: 0, advanceAfter: final };
+  }
+  const final = safeNumber((oldBefore + receiptGram) - issueGram);
+  return final < 0
+    ? { oldAfter: 0, advanceAfter: safeNumber(Math.abs(final)) }
+    : { oldAfter: final, advanceAfter: 0 };
+};
+
+// Plus Final Summary's Outstanding: combines Issue/Receipt Pure with the Cash
+// Table + Gram Table conversions (both treated as payments reducing what's
+// owed) and whichever balance the customer currently holds. Mirrors the
+// backend's computePlusOutstanding.
+const computePlusOutstanding = (issuePure, receiptPure, totalCash, totalGram, oldBefore, advanceBefore) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    const outstanding = safeNumber(issuePure - (advanceBefore + receiptPure + totalCash + totalGram));
+    return outstanding < 0
+      ? { outstanding, oldAfter: safeNumber(Math.abs(outstanding)), advanceAfter: 0 }
+      : { outstanding, oldAfter: 0, advanceAfter: outstanding };
+  }
+  const outstanding = safeNumber((issuePure + oldBefore) - (receiptPure + totalCash + totalGram));
+  return outstanding < 0
+    ? { outstanding, oldAfter: 0, advanceAfter: safeNumber(Math.abs(outstanding)) }
+    : { outstanding, oldAfter: outstanding, advanceAfter: 0 };
+};
 
 export default function TransactionCalculationScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
@@ -92,10 +162,48 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [wReceiptRate, setWReceiptRate] = useState('');
 
   // Wastage Profit Table (internal-only, never shown on the bill)
-  const [wpWeight, setWpWeight] = useState('');
+  const [wpBuyingWeight, setWpBuyingWeight] = useState('');
   const [wpBuying, setWpBuying] = useState('');
+  const [wpSellingWeight, setWpSellingWeight] = useState('');
   const [wpSelling, setWpSelling] = useState('');
   const [wpEditingId, setWpEditingId] = useState(null);
+
+  // Wastage Remainder Table (optional final manual adjustment on top of the
+  // Final Summary's Current Old/Advance Balance)
+  const [wastageSubtractionAmount, setWastageSubtractionAmount] = useState('');
+
+  // Plus Cash/Gram Mode toggle — only one of the two tables is active at a time.
+  const [plusCashGramMode, setPlusCashGramMode] = useState('CASH'); // 'CASH' | 'GRAM'
+
+  // Plus Cash Table (internal-only calc; balance effect is real) — entry form + row list
+  const [plusCashAmount, setPlusCashAmount] = useState('');
+  const [plusCashRate, setPlusCashRate] = useState('');
+  const [plusCashRows, setPlusCashRows] = useState(() => {
+    if (!prefilledData?.plusCashRows?.length) return [];
+    return prefilledData.plusCashRows.map((r, idx) => ({
+      id: String(Date.now() + idx + 40000),
+      cash: r.cash || 0,
+      rate: r.rate || 0,
+      finalGram: r.finalGram || 0,
+    }));
+  });
+
+  // Plus Gram Table (Gram mode) — entry form + row list
+  const [plusGramInput, setPlusGramInput] = useState('');
+  const [plusGramRows, setPlusGramRows] = useState(() => {
+    if (!prefilledData?.plusGramRows?.length) return [];
+    return prefilledData.plusGramRows.map((r, idx) => ({
+      id: String(Date.now() + idx + 50000),
+      gram: r.gram || 0,
+    }));
+  });
+
+  // Plus Remainder Table (optional final manual adjustment on top of Outstanding)
+  const [plusReminderPureInput, setPlusReminderPureInput] = useState('');
+
+  // Shared Reminder Date (set from either module's Remainder Table)
+  const [reminderDate, setReminderDate] = useState(prefilledData?.reminderDate ? new Date(prefilledData.reminderDate) : null);
+  const [showReminderDatePicker, setShowReminderDatePicker] = useState(false);
 
   // Plus Profit Table (internal-only, never shown on the bill)
   const [ppWeight, setPpWeight] = useState('');
@@ -166,8 +274,11 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     if (!prefilledData?.wastageProfit?.length) return [];
     return prefilledData.wastageProfit.map((r, idx) => ({
       id: String(Date.now() + idx + 20000),
-      weight: r.weight || 0,
+      // Older saved bills only had a single "weight" field — fall back to it
+      // for both sides so pre-existing records still display something sane.
+      buyingWeight: r.buyingWeight ?? r.weight ?? 0,
       buyingPercent: r.buyingPercent || 0,
+      sellingWeight: r.sellingWeight ?? r.weight ?? 0,
       sellingPercent: r.sellingPercent || 0,
       bValue: r.bValue || 0,
       sValue: r.sValue || 0,
@@ -212,14 +323,31 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [sgstPercent, setSgstPercent] = useState('1.5');
   const [hsnCode, setHsnCode] = useState('');
 
-  // Auto-generate a common bill number on mount
+  // Auto-generate a common bill number on mount.
+  // B2C Wastage/Plus bills instead get a real, independently-sequenced number
+  // (B2CW#/B2CP#) once the customer's category is known — see the effect below.
   useEffect(() => {
+    if (type === 'B2C') return;
     const pad = (n) => String(n).padStart(2, '0');
     const now = new Date();
     const datePart = `${now.getFullYear().toString().slice(-2)}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
     const seq = Math.floor(Math.random() * 900) + 100;
     setCommonBillNo(`${(type || 'BILL').toUpperCase()}-${datePart}-${seq}`);
   }, []);
+
+  // B2C Wastage/Plus: reserve the next number in that module's independent
+  // running sequence (B2CW1, B2CW2... / B2CP1, B2CP2...) once the customer's
+  // category is known. Skipped when editing an existing bill — it keeps its
+  // original number.
+  useEffect(() => {
+    if (type !== 'B2C' || !customer || editTransactionId || commonBillNo) return;
+    const category = customer.customerCategory === 'WASTAGE' ? 'WASTAGE' : 'PLUS';
+    transactionAPI.getNextBillNumber(category)
+      .then(res => {
+        if (res.data.success) setCommonBillNo(res.data.data.billNo);
+      })
+      .catch(() => {});
+  }, [type, customer, editTransactionId, commonBillNo]);
 
   // Pre-fill HSN code from admin settings when GST is turned on
   useEffect(() => {
@@ -239,8 +367,17 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         const res = await customerAPI.getById(customerId);
         if (res.data.success) {
           setCustomer(res.data.data);
-          setOldBalanceInput(String(res.data.data.oldBalance || 0));
-          setAdvanceInput(String(res.data.data.advance || 0));
+          const rawOldBalance = res.data.data.oldBalance || 0;
+          const rawAdvance = res.data.data.advance || 0;
+          // Old Balance must never display as negative — a negative value means
+          // the customer is actually in credit, so it belongs in Advance instead.
+          if (rawOldBalance < 0) {
+            setOldBalanceInput('0');
+            setAdvanceInput(String(rawAdvance + Math.abs(rawOldBalance)));
+          } else {
+            setOldBalanceInput(String(rawOldBalance));
+            setAdvanceInput(String(rawAdvance));
+          }
         }
       } catch (e) {
         Alert.alert('Error', 'Failed to load customer');
@@ -289,6 +426,13 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
     if (prefilledData.oldBalanceBefore != null) setOldBalanceInput(String(prefilledData.oldBalanceBefore));
     if (prefilledData.advanceBalanceBefore != null) setAdvanceInput(String(prefilledData.advanceBalanceBefore));
+
+    if (prefilledData.plusCashAmount != null) setPlusCashAmount(String(prefilledData.plusCashAmount));
+    if (prefilledData.plusCashRate != null) setPlusCashRate(String(prefilledData.plusCashRate));
+
+    if (prefilledData.wastageSubtractionAmount) setWastageSubtractionAmount(String(prefilledData.wastageSubtractionAmount));
+    if (prefilledData.plusReminderPure) setPlusReminderPureInput(String(prefilledData.plusReminderPure));
+    if (prefilledData.plusGramRows?.length || prefilledData.plusTotalGram) setPlusCashGramMode('GRAM');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle Stock Dropdown Search
@@ -538,18 +682,20 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   };
 
   // --- Wastage Profit Table (independent, internal-only) ---
-  const wpBValue = useMemo(() => (parseFloat(wpWeight) || 0) * (parseFloat(wpBuying) || 0), [wpWeight, wpBuying]);
-  const wpSValue = useMemo(() => (parseFloat(wpWeight) || 0) * (parseFloat(wpSelling) || 0), [wpWeight, wpSelling]);
-  const wpProfit = useMemo(() => wpSValue - wpBValue, [wpSValue, wpBValue]);
+  // B Value = Buying Weight × (Buying % ÷ 100); S Value = Selling Weight × (Selling % ÷ 100).
+  const wpBValue = useMemo(() => safeNumber((parseFloat(wpBuyingWeight) || 0) * ((parseFloat(wpBuying) || 0) / 100)), [wpBuyingWeight, wpBuying]);
+  const wpSValue = useMemo(() => safeNumber((parseFloat(wpSellingWeight) || 0) * ((parseFloat(wpSelling) || 0) / 100)), [wpSellingWeight, wpSelling]);
+  const wpProfit = useMemo(() => safeNumber(wpSValue - wpBValue), [wpSValue, wpBValue]);
 
   const handleSaveWastageProfitRow = () => {
-    if (!wpWeight) {
-      Alert.alert('Error', 'Weight is required.');
+    if (!wpBuyingWeight && !wpSellingWeight) {
+      Alert.alert('Error', 'Buying Weight or Selling Weight is required.');
       return;
     }
     const row = {
-      weight: parseFloat(wpWeight) || 0,
+      buyingWeight: parseFloat(wpBuyingWeight) || 0,
       buyingPercent: parseFloat(wpBuying) || 0,
+      sellingWeight: parseFloat(wpSellingWeight) || 0,
       sellingPercent: parseFloat(wpSelling) || 0,
       bValue: wpBValue,
       sValue: wpSValue,
@@ -560,15 +706,17 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     } else {
       setWastageProfitRows(rows => [...rows, { ...row, id: Date.now().toString() }]);
     }
-    setWpWeight('');
+    setWpBuyingWeight('');
     setWpBuying('');
+    setWpSellingWeight('');
     setWpSelling('');
     setWpEditingId(null);
   };
 
   const handleEditWastageProfitRow = (row) => {
-    setWpWeight(String(row.weight));
+    setWpBuyingWeight(String(row.buyingWeight));
     setWpBuying(String(row.buyingPercent));
+    setWpSellingWeight(String(row.sellingWeight));
     setWpSelling(String(row.sellingPercent));
     setWpEditingId(row.id);
   };
@@ -576,7 +724,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const handleDeleteWastageProfitRow = (id) => {
     setWastageProfitRows(rows => rows.filter(r => r.id !== id));
     if (wpEditingId === id) {
-      setWpWeight(''); setWpBuying(''); setWpSelling(''); setWpEditingId(null);
+      setWpBuyingWeight(''); setWpBuying(''); setWpSellingWeight(''); setWpSelling(''); setWpEditingId(null);
     }
   };
 
@@ -647,7 +795,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
     const newItem = {
       id: Date.now().toString(),
       stockId: bdIssueStockId || null,
-      itemNumber: bdIssueItemNo || 'N/A',
+      itemNumber: 'N/A',
       itemName: bdIssueItemName || 'Manual Entry',
       weight: parseFloat(bdIssueWeight) || 0,
       count: 1,
@@ -766,8 +914,11 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const activeGoldRate = parseFloat(globalGoldRate) || 0;
   const goldConvertedAmt = (paymentMode === 'Gold') ? ((parseFloat(goldPayWeight) || 0) * activeGoldRate) : 0;
   
-  // Confirmed payment values
-  const collectedAmount = confirmedPayment.amount;
+  // Wastage: Amount Collected is a live, manually-editable field — Final Summary
+  // recalculates immediately from whatever is typed, with no Collect Payment
+  // confirmation step required. Every other flow still needs confirmedPayment.
+  const wastageCollectedAmount = paymentAmount !== '' ? (parseFloat(paymentAmount) || 0) : finalAmount;
+  const collectedAmount = isWastage ? wastageCollectedAmount : confirmedPayment.amount;
   const collectedGrams = confirmedPayment.grams;
 
   // Handle Collect Payment Button
@@ -792,18 +943,82 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // Plus and B2D both settle in grams, not cash — used for the auxiliary payload fields below.
   const isGramLedger = isPlus || isGramOnly;
 
-  if (isPlus) {
-    // Case 1: Issue Pure > Receipt Pure — Difference added to Old Balance, Advance untouched.
-    // Case 2: Receipt Pure > Issue Pure — Difference added to Advance, Old Balance untouched.
-    // Case 3: equal — neither changes.
-    if (gramOutstanding > 0) {
-      oldBalanceAfter = oldBalanceBefore + gramOutstanding;
-    } else if (gramOutstanding < 0) {
-      advanceBalanceAfter = advanceBalanceBefore + Math.abs(gramOutstanding);
+  // Plus Cash Table: Cash (₹) manually converted to Pure grams at a manual rate
+  // — this is the live entry-form preview for the row about to be added.
+  const plusFinalGram = useMemo(() => {
+    const cash = parseFloat(plusCashAmount) || 0;
+    const rate = parseFloat(plusCashRate) || 0;
+    return rate > 0 ? safeNumber(cash / rate) : 0;
+  }, [plusCashAmount, plusCashRate]);
+
+  const handleAddPlusCashRow = () => {
+    if (!plusCashAmount || !plusCashRate) {
+      Alert.alert('Error', 'Cash and Rate are required.');
+      return;
     }
+    setPlusCashRows(rows => [...rows, {
+      id: Date.now().toString(),
+      cash: parseFloat(plusCashAmount) || 0,
+      rate: parseFloat(plusCashRate) || 0,
+      finalGram: plusFinalGram,
+    }]);
+    setPlusCashAmount('');
+    setPlusCashRate('');
+  };
+  const handleDeletePlusCashRow = (id) => setPlusCashRows(rows => rows.filter(r => r.id !== id));
+
+  const handleAddPlusGramRow = () => {
+    if (!plusGramInput) {
+      Alert.alert('Error', 'Gram is required.');
+      return;
+    }
+    setPlusGramRows(rows => [...rows, { id: Date.now().toString(), gram: parseFloat(plusGramInput) || 0 }]);
+    setPlusGramInput('');
+  };
+  const handleDeletePlusGramRow = (id) => setPlusGramRows(rows => rows.filter(r => r.id !== id));
+
+  // Totals across all added rows — Total Cash (grams) and Total Gram feed the
+  // Plus Final Summary's Outstanding formula together.
+  const plusTotalFinalGram = useMemo(() => safeNumber(plusCashRows.reduce((s, r) => s + (r.finalGram || 0), 0)), [plusCashRows]);
+  const plusTotalGramSum = useMemo(() => safeNumber(plusGramRows.reduce((s, r) => s + (r.gram || 0), 0)), [plusGramRows]);
+
+  // Wastage: Final Cash mirrors the manually-entered Amount Collected directly
+  // (confirmed business rule) — it no longer nets against Issue/Receipt totals.
+  const wastageNetFinalCash = safeNumber(collectedAmount);
+
+  let plusOutstanding = 0;
+  // Pre-Remainder-Table balance — what Final Summary's "Current Old/Advance
+  // Balance" shows. The Remainder Table's own "Balance Amount" / "Final
+  // Current Balance" is the post-subtraction result (= oldBalanceAfter/advanceBalanceAfter).
+  let preRemainderOldBalance = oldBalanceBefore;
+  let preRemainderAdvanceBalance = advanceBalanceBefore;
+
+  if (isWastage) {
+    const bal = computeSignAwareBalance(oldBalanceBefore, advanceBalanceBefore, wastageNetFinalCash);
+    preRemainderOldBalance = bal.oldAfter;
+    preRemainderAdvanceBalance = bal.advanceAfter;
+    // Remainder Table (optional): Subtraction Amount further reduces whichever
+    // balance the Final Cash calc just landed on. A subtraction of 0 no-ops.
+    const remainder = applyRemainderSubtraction(bal.oldAfter, bal.advanceAfter, parseFloat(wastageSubtractionAmount) || 0);
+    oldBalanceAfter = remainder.oldBalance;
+    advanceBalanceAfter = remainder.advanceBalance;
+  } else if (isPlus) {
+    const outcome = computePlusOutstanding(
+      issueTotalPurity, receiptTotalPurity, plusTotalFinalGram, plusTotalGramSum, oldBalanceBefore, advanceBalanceBefore
+    );
+    plusOutstanding = outcome.outstanding;
+    preRemainderOldBalance = outcome.oldAfter;
+    preRemainderAdvanceBalance = outcome.advanceAfter;
+    // Remainder Table (optional): Reminder Pure further reduces whichever
+    // balance the Outstanding calc just landed on. A subtraction of 0 no-ops.
+    const remainder = applyRemainderSubtraction(outcome.oldAfter, outcome.advanceAfter, parseFloat(plusReminderPureInput) || 0);
+    oldBalanceAfter = remainder.oldBalance;
+    advanceBalanceAfter = remainder.advanceBalance;
   } else if (isGramOnly) {
-    // Gram-only ledger: outstanding balance is added directly to old balance
-    oldBalanceAfter = oldBalanceBefore + gramOutstanding;
+    // B2D: Case 1/2 gram-only ledger with automatic Old Balance <-> Advance conversion.
+    const bal = computeB2DBalance(oldBalanceBefore, advanceBalanceBefore, issueTotalPurity, receiptTotalPurity);
+    oldBalanceAfter = bal.oldAfter;
+    advanceBalanceAfter = bal.advanceAfter;
   } else if (activeGoldRate > 0) {
     if (transactionOutstanding > 0) {
       // Underpaid: Add outstanding grams to old balance
@@ -861,6 +1076,18 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       receiptItems,
       wastageProfit: wastageProfitRows.map(({ id, ...r }) => r),
       plusProfit: plusProfitRows.map(({ id, ...r }) => r),
+      plusCashAmount: parseFloat(plusCashAmount) || 0,
+      plusCashRate: parseFloat(plusCashRate) || 0,
+      // Total Cash (₹->gram) — the sum of all added Cash Table rows, not just
+      // the live entry-form preview.
+      plusFinalGram: plusTotalFinalGram,
+      plusCashRows: plusCashRows.map(({ id, ...r }) => r),
+      plusGramRows: plusGramRows.map(({ id, ...r }) => r),
+      plusTotalGram: plusTotalGramSum,
+      plusOutstanding: safeNumber(plusOutstanding),
+      wastageSubtractionAmount: parseFloat(wastageSubtractionAmount) || 0,
+      plusReminderPure: parseFloat(plusReminderPureInput) || 0,
+      reminderDate: reminderDate ? reminderDate.toISOString() : null,
       paymentDetails: {
         mode: paymentMode,
         amount: paymentMode === 'Gold' ? 0 : collectedAmount
@@ -896,11 +1123,15 @@ export default function TransactionCalculationScreen({ navigation, route }) {
       convertedGram: collectedGrams,
       collectedAmount: collectedAmount,
       outstandingAmount: isGramLedger ? 0 : Math.max(0, transactionOutstanding),
-      outstandingGram: isGramLedger
+      outstandingGram: isPlus
         ? Math.max(0, gramOutstanding)
+        : isGramOnly
+        ? Math.max(0, oldBalanceAfter)
         : (activeGoldRate ? (Math.max(0, transactionOutstanding) / activeGoldRate) : 0),
-      status: isGramLedger
+      status: isPlus
         ? (gramOutstanding > 0 ? 'PARTIAL' : 'PAID')
+        : isGramOnly
+        ? (oldBalanceAfter > 0 ? 'PARTIAL' : 'PAID')
         : (Math.max(0, transactionOutstanding) > 0 ? 'PARTIAL' : 'PAID'),
       createdAt: new Date().toISOString(),
       editTransactionId: editTransactionId || undefined,
@@ -983,12 +1214,18 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               </View>
               <View style={styles.gridItem}>
                 <Text style={styles.inputLabel}>Bill No</Text>
+                {type === 'B2C' ? (
+                  <View style={[styles.inputHighlight, { justifyContent: 'center' }]}>
+                    <Text style={{ color: DARK_BROWN, fontWeight: '700' }}>{commonBillNo || 'Generating…'}</Text>
+                  </View>
+                ) : (
                 <TextInput
                   style={styles.inputHighlight}
                   value={commonBillNo}
                   onChangeText={setCommonBillNo}
                   autoCapitalize="characters"
                 />
+                )}
               </View>
             </View>
           </View>
@@ -1082,57 +1319,23 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
 
-          <View style={{zIndex: 100}}>
-            <Text style={styles.inputLabel}>Search by Item Number</Text>
-            <View style={styles.barcodeRow}>
-              <TextInput
-                style={styles.barcodeInput}
-                placeholder="Enter Item Number..."
-                placeholderTextColor="#999"
-                value={stockQuery}
-                onChangeText={(t) => { setStockQuery(t); setShowStockDropdown(true); }}
-                onFocus={() => setShowStockDropdown(true)}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-                onSubmitEditing={() => handleStockLookup(stockQuery)}
-              />
-            </View>
-
-            {showStockDropdown && stockResults.length > 0 && (
-              <View style={styles.dropdown}>
-                {stockResults.map(s => (
-                  <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectStockItem(s)}>
-                    <Text style={[styles.dropItemText, { fontWeight: '800', fontSize: 13 }]}>{s.itemNumber}</Text>
-                    <Text style={{ fontSize: 11, color: '#555', marginTop: 2 }}>
-                      {s.itemName || s.designName}  ·  Wt: {s.netWeight}g
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-
           <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Item Number</Text>
-              <TextInput style={styles.input} value={bdIssueItemNo} onChangeText={setBdIssueItemNo} />
-            </View>
             <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Item Name</Text>
               <TextInput style={styles.input} value={bdIssueItemName} onChangeText={setBdIssueItemName} />
             </View>
-          </View>
-
-          <View style={styles.gridRow}>
             <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Weight (g)</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={bdIssueWeight} onChangeText={setBdIssueWeight} />
             </View>
+          </View>
+
+          <View style={styles.gridRow}>
             <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Actual Touch (%)</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={bdIssueActualTouch} onChangeText={setBdIssueActualTouch} />
             </View>
+            <View style={styles.gridItem} />
           </View>
 
           <View style={styles.gridRow}>
@@ -1409,8 +1612,8 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Weight</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={wpWeight} onChangeText={setWpWeight} />
+              <Text style={styles.inputLabel}>Buying Weight</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wpBuyingWeight} onChangeText={setWpBuyingWeight} />
             </View>
             <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Buying %</Text>
@@ -1420,10 +1623,13 @@ export default function TransactionCalculationScreen({ navigation, route }) {
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Selling Weight</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wpSellingWeight} onChangeText={setWpSellingWeight} />
+            </View>
+            <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Selling %</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={wpSelling} onChangeText={setWpSelling} />
             </View>
-            <View style={styles.gridItem} />
           </View>
 
           <View style={styles.gridRow}>
@@ -1454,7 +1660,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               {wastageProfitRows.map(row => (
                 <View key={row.id} style={styles.listItem}>
                   <View style={styles.listTextCol}>
-                    <Text style={styles.listTitle}>Wt: {row.weight.toFixed(3)}g | B: {row.buyingPercent}% | S: {row.sellingPercent}%</Text>
+                    <Text style={styles.listTitle}>B.Wt: {row.buyingWeight.toFixed(3)}g | B%: {row.buyingPercent}% | S.Wt: {row.sellingWeight.toFixed(3)}g | S%: {row.sellingPercent}%</Text>
                     <Text style={styles.listSub}>B Value: {row.bValue.toLocaleString('en-IN', {maximumFractionDigits:2})} | S Value: {row.sValue.toLocaleString('en-IN', {maximumFractionDigits:2})} | Profit: {row.profit.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
                   </View>
                   <TouchableOpacity onPress={() => handleEditWastageProfitRow(row)} style={{ marginRight: 10 }}>
@@ -1590,6 +1796,105 @@ export default function TransactionCalculationScreen({ navigation, route }) {
                 </View>
               ))}
             </View>
+          )}
+        </View>
+        )}
+
+        {/* Plus Cash/Gram Mode Toggle + Table — only one table active at a time */}
+        {isPlus && (
+        <View style={[styles.card, {zIndex: -2}]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <Text style={styles.cardTitle}>{plusCashGramMode === 'CASH' ? 'Cash Table' : 'Gram Table'}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={[styles.inputLabel, { marginBottom: 0 }]}>{plusCashGramMode === 'CASH' ? 'Cash Mode' : 'Gram Mode'}</Text>
+              <Switch
+                value={plusCashGramMode === 'CASH'}
+                onValueChange={(val) => setPlusCashGramMode(val ? 'CASH' : 'GRAM')}
+                trackColor={{ true: GOLD }}
+              />
+            </View>
+          </View>
+
+          {plusCashGramMode === 'CASH' ? (
+            <>
+              <View style={styles.gridRow}>
+                <View style={styles.gridItem}>
+                  <Text style={styles.inputLabel}>Cash (₹)</Text>
+                  <TextInput style={styles.input} keyboardType="numeric" value={plusCashAmount} onChangeText={setPlusCashAmount} />
+                </View>
+                <View style={styles.gridItem}>
+                  <Text style={styles.inputLabel}>Rate (Manual)</Text>
+                  <TextInput style={styles.inputHighlight} keyboardType="numeric" value={plusCashRate} onChangeText={setPlusCashRate} placeholder="Manual Entry" />
+                </View>
+              </View>
+
+              <View style={styles.gridRow}>
+                <View style={styles.gridItem}>
+                  <Text style={styles.inputLabel}>Final Gram (Auto)</Text>
+                  <Text style={[styles.calcValue, { color: GOLD }]}>{plusFinalGram.toFixed(3)} g</Text>
+                </View>
+                <View style={styles.gridItem} />
+              </View>
+
+              <TouchableOpacity style={styles.actionBtn} onPress={handleAddPlusCashRow}>
+                <Text style={styles.actionBtnText}>+ Add Item</Text>
+              </TouchableOpacity>
+
+              {plusCashRows.length > 0 && (
+                <View style={{ marginTop: 12 }}>
+                  {plusCashRows.map(row => (
+                    <View key={row.id} style={styles.listItem}>
+                      <View style={styles.listTextCol}>
+                        <Text style={styles.listTitle}>Cash: ₹{row.cash.toLocaleString('en-IN')} | Rate: ₹{row.rate}</Text>
+                        <Text style={styles.listSub}>Final Gram: {row.finalGram.toFixed(3)}g</Text>
+                      </View>
+                      <TouchableOpacity onPress={() => handleDeletePlusCashRow(row.id)}>
+                        <MaterialCommunityIcons name="trash-can-outline" size={22} color="#D32F2F" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <View style={{ borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 8 }} />
+                  <View style={styles.sumRow}>
+                    <Text style={[styles.sumLabel, { fontWeight: '800', color: DARK_BROWN }]}>Total Final Gram:</Text>
+                    <Text style={[styles.sumVal, { color: GOLD, fontWeight: '800' }]}>{plusTotalFinalGram.toFixed(3)} g</Text>
+                  </View>
+                </View>
+              )}
+            </>
+          ) : (
+            <>
+              <View style={styles.gridRow}>
+                <View style={styles.gridItem}>
+                  <Text style={styles.inputLabel}>Gram</Text>
+                  <TextInput style={styles.input} keyboardType="numeric" value={plusGramInput} onChangeText={setPlusGramInput} />
+                </View>
+                <View style={styles.gridItem} />
+              </View>
+
+              <TouchableOpacity style={styles.actionBtn} onPress={handleAddPlusGramRow}>
+                <Text style={styles.actionBtnText}>+ Add Item</Text>
+              </TouchableOpacity>
+
+              {plusGramRows.length > 0 && (
+                <View style={{ marginTop: 12 }}>
+                  {plusGramRows.map(row => (
+                    <View key={row.id} style={styles.listItem}>
+                      <View style={styles.listTextCol}>
+                        <Text style={styles.listTitle}>Gram: {row.gram.toFixed(3)}g</Text>
+                      </View>
+                      <TouchableOpacity onPress={() => handleDeletePlusGramRow(row.id)}>
+                        <MaterialCommunityIcons name="trash-can-outline" size={22} color="#D32F2F" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  <View style={{ borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 8 }} />
+                  <View style={styles.sumRow}>
+                    <Text style={[styles.sumLabel, { fontWeight: '800', color: DARK_BROWN }]}>Total Gram:</Text>
+                    <Text style={[styles.sumVal, { color: GOLD, fontWeight: '800' }]}>{plusTotalGramSum.toFixed(3)} g</Text>
+                  </View>
+                </View>
+              )}
+            </>
           )}
         </View>
         )}
@@ -1787,13 +2092,36 @@ export default function TransactionCalculationScreen({ navigation, route }) {
                 <Text style={styles.sumLabel}>Total Receipt Cash:</Text>
                 <Text style={styles.sumVal}>- ₹ {receiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
               </View>
+              <View style={styles.sumRow}>
+                <Text style={[styles.sumLabel, {color: '#2E7D32'}]}>Collected Cash:</Text>
+                <Text style={[styles.sumVal, {color: '#2E7D32'}]}>- ₹ {collectedAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
               <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
                 <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Final Cash:</Text>
-                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18}]}>₹ {finalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18}]}>₹ {wastageNetFinalCash.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
               </View>
               <View style={styles.sumRow}>
                 <Text style={styles.sumLabel}>Payment Type:</Text>
                 <Text style={styles.sumVal}>{paymentMode}</Text>
+              </View>
+
+              <View style={{borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 10}} />
+
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Previous Old Balance:</Text>
+                <Text style={styles.sumVal}>₹ {oldBalanceBefore.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Previous Advance Balance:</Text>
+                <Text style={styles.sumVal}>₹ {advanceBalanceBefore.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={[styles.sumLabel, {fontWeight: '700', color: DARK_BROWN}]}>
+                  {preRemainderOldBalance > 0 ? 'Current Old Balance:' : 'Current Advance Balance:'}
+                </Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', color: preRemainderOldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  ₹ {(preRemainderOldBalance > 0 ? preRemainderOldBalance : preRemainderAdvanceBalance).toLocaleString('en-IN', {maximumFractionDigits:2})}
+                </Text>
               </View>
             </>
           ) : isPlus ? (
@@ -1806,12 +2134,25 @@ export default function TransactionCalculationScreen({ navigation, route }) {
                 <Text style={styles.sumLabel}>Total Receipt Pure:</Text>
                 <Text style={styles.sumVal}>- {receiptTotalPurity.toFixed(3)} g</Text>
               </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Total Cash:</Text>
+                <Text style={styles.sumVal}>- {plusTotalFinalGram.toFixed(3)} g</Text>
+              </View>
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>Total Gram:</Text>
+                <Text style={styles.sumVal}>- {plusTotalGramSum.toFixed(3)} g</Text>
+              </View>
+
+              <View style={{borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 10}} />
+
+              <View style={styles.sumRow}>
+                <Text style={styles.sumLabel}>{advanceBalanceBefore > 0 && oldBalanceBefore === 0 ? 'Previous Advance Balance:' : 'Previous Old Balance:'}</Text>
+                <Text style={styles.sumVal}>{(advanceBalanceBefore > 0 && oldBalanceBefore === 0 ? advanceBalanceBefore : oldBalanceBefore).toFixed(3)} g</Text>
+              </View>
               <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
-                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>
-                  {gramOutstanding > 0 ? 'Outstanding:' : gramOutstanding < 0 ? 'Advance:' : 'Difference:'}
-                </Text>
-                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: gramOutstanding > 0 ? '#D32F2F' : gramOutstanding < 0 ? '#2E7D32' : DARK_BROWN}]}>
-                  {Math.abs(gramOutstanding).toFixed(3)} g
+                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Outstanding:</Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: plusOutstanding > 0 ? '#D32F2F' : plusOutstanding < 0 ? '#2E7D32' : DARK_BROWN}]}>
+                  {Math.abs(plusOutstanding).toFixed(3)} g
                 </Text>
               </View>
             </>
@@ -1825,22 +2166,20 @@ export default function TransactionCalculationScreen({ navigation, route }) {
                 <Text style={styles.sumLabel}>Receipt Gram:</Text>
                 <Text style={styles.sumVal}>- {receiptTotalPurity.toFixed(3)} g</Text>
               </View>
-              <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
-                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>Outstanding Balance:</Text>
-                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: gramOutstanding >= 0 ? '#D32F2F' : '#2E7D32'}]}>
-                  {Math.abs(gramOutstanding).toFixed(3)} g {gramOutstanding < 0 ? '(Credit)' : ''}
-                </Text>
-              </View>
 
               <View style={{borderTopWidth: 1, borderColor: '#E5D8C0', marginVertical: 10}} />
 
               <View style={styles.sumRow}>
-                <Text style={styles.sumLabel}>Old Balance (Before):</Text>
-                <Text style={styles.sumVal}>{oldBalanceBefore.toFixed(3)} g</Text>
+                <Text style={styles.sumLabel}>{advanceBalanceBefore > 0 && oldBalanceBefore === 0 ? 'Previous Advance Balance:' : 'Previous Old Balance:'}</Text>
+                <Text style={styles.sumVal}>{(advanceBalanceBefore > 0 && oldBalanceBefore === 0 ? advanceBalanceBefore : oldBalanceBefore).toFixed(3)} g</Text>
               </View>
-              <View style={styles.sumRow}>
-                <Text style={styles.sumLabel}>Old Balance (After):</Text>
-                <Text style={[styles.sumVal, {color: '#D32F2F'}]}>{oldBalanceAfter.toFixed(3)} g</Text>
+              <View style={[styles.sumRow, {borderTopWidth: 1, borderColor: '#E5D8C0', paddingTop: 10, marginTop: 5}]}>
+                <Text style={[styles.sumLabel, {fontWeight: '800', color: DARK_BROWN}]}>
+                  {oldBalanceAfter > 0 ? 'Current Old Balance:' : 'Current Advance Balance:'}
+                </Text>
+                <Text style={[styles.sumVal, {fontWeight: '800', fontSize: 18, color: oldBalanceAfter > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  {(oldBalanceAfter > 0 ? oldBalanceAfter : advanceBalanceAfter).toFixed(3)} g
+                </Text>
               </View>
             </>
           ) : (
@@ -1886,6 +2225,100 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             </>
           )}
         </View>
+
+        {/* Wastage Remainder Table — optional final manual adjustment on top of Current Balance */}
+        {isWastage && (
+        <View style={[styles.card, {zIndex: -6}]}>
+          <Text style={styles.cardTitle}>Remainder Table</Text>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>{preRemainderOldBalance > 0 ? 'Current Old Balance' : 'Current Advance Balance'}</Text>
+              <Text style={[styles.calcValue, {color: preRemainderOldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>₹{(preRemainderOldBalance > 0 ? preRemainderOldBalance : preRemainderAdvanceBalance).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Subtraction Amount</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={wastageSubtractionAmount} onChangeText={setWastageSubtractionAmount} placeholder="0" />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>{oldBalanceAfter > 0 ? 'Current Old Balance' : 'Current Advance Balance'}</Text>
+              <Text style={[styles.calcValue, {color: oldBalanceAfter > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                ₹{(oldBalanceAfter > 0 ? oldBalanceAfter : advanceBalanceAfter).toLocaleString('en-IN', {maximumFractionDigits:2})}
+              </Text>
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <View style={{ marginTop: 12 }}>
+            <Text style={styles.inputLabel}>Reminder Date (optional)</Text>
+            <TouchableOpacity style={styles.datePickerBtn} onPress={() => setShowReminderDatePicker(true)}>
+              <MaterialCommunityIcons name="calendar" size={20} color={GOLD} style={{ marginRight: 8 }} />
+              <Text style={styles.dateText}>{reminderDate ? reminderDate.toLocaleDateString('en-GB') : 'Select a date'}</Text>
+            </TouchableOpacity>
+            {showReminderDatePicker && (
+              <DateTimePicker
+                value={reminderDate || new Date()}
+                mode="date"
+                display="default"
+                onChange={(e, date) => {
+                  setShowReminderDatePicker(false);
+                  if (date) setReminderDate(date);
+                }}
+              />
+            )}
+          </View>
+        </View>
+        )}
+
+        {/* Plus Remainder Table — optional final manual adjustment on top of Outstanding */}
+        {isPlus && (
+        <View style={[styles.card, {zIndex: -6}]}>
+          <Text style={styles.cardTitle}>Remainder Table</Text>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Outstanding</Text>
+              <Text style={styles.calcValue}>{plusOutstanding.toFixed(3)} g</Text>
+            </View>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>Reminder Pure</Text>
+              <TextInput style={styles.input} keyboardType="numeric" value={plusReminderPureInput} onChangeText={setPlusReminderPureInput} placeholder="0" />
+            </View>
+          </View>
+
+          <View style={styles.gridRow}>
+            <View style={styles.gridItem}>
+              <Text style={styles.inputLabel}>{oldBalanceAfter > 0 ? 'Current Old Balance' : 'Current Advance Balance'}</Text>
+              <Text style={[styles.calcValue, {color: oldBalanceAfter > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                {(oldBalanceAfter > 0 ? oldBalanceAfter : advanceBalanceAfter).toFixed(3)}g
+              </Text>
+            </View>
+            <View style={styles.gridItem} />
+          </View>
+
+          <View style={{ marginTop: 12 }}>
+            <Text style={styles.inputLabel}>Reminder Date (optional)</Text>
+            <TouchableOpacity style={styles.datePickerBtn} onPress={() => setShowReminderDatePicker(true)}>
+              <MaterialCommunityIcons name="calendar" size={20} color={GOLD} style={{ marginRight: 8 }} />
+              <Text style={styles.dateText}>{reminderDate ? reminderDate.toLocaleDateString('en-GB') : 'Select a date'}</Text>
+            </TouchableOpacity>
+            {showReminderDatePicker && (
+              <DateTimePicker
+                value={reminderDate || new Date()}
+                mode="date"
+                display="default"
+                onChange={(e, date) => {
+                  setShowReminderDatePicker(false);
+                  if (date) setReminderDate(date);
+                }}
+              />
+            )}
+          </View>
+        </View>
+        )}
 
         <TouchableOpacity style={styles.saveBtn} onPress={handlePreviewBill}>
           <Text style={styles.saveBtnText}>Preview Bill</Text>
@@ -1938,6 +2371,8 @@ const styles = StyleSheet.create({
   listTextCol: { flex: 1 },
   listTitle: { fontSize: 14, color: DARK_BROWN, fontWeight: '700' },
   listSub: { fontSize: 12, color: '#8A6822', marginTop: 2 },
+  datePickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E5D8C0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 12 },
+  dateText: { fontSize: 14, color: DARK_BROWN, fontWeight: '600' },
   paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   payBtn: { backgroundColor: '#F0F0F0', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
   payBtnActive: { backgroundColor: '#2196F3' },

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator, Platform,
+  Alert, ActivityIndicator, Platform, TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -55,9 +55,18 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
   const [saved, setSaved] = useState(false);
   const [printing, setPrinting] = useState(false);
 
+  // Bill Style (Plus/Wastage print layout) — purely presentational, saved
+  // alongside the order so reopening the bill remembers the choice.
+  const [billStyle, setBillStyle] = useState(null);
+  const [editingBill, setEditingBill] = useState(false);
+  const [notesInput, setNotesInput] = useState('');
+  const [savingBillStyle, setSavingBillStyle] = useState(false);
+
   useEffect(() => {
     if (isPreviewMode) {
       setOrder(previewPayload);
+      setBillStyle(previewPayload.billStyle || null);
+      setNotesInput(previewPayload.notes || '');
       setLoading(false);
       return;
     }
@@ -71,6 +80,8 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
         const res = await orderAPI.getById(orderId);
         if (res.data.success) {
           setOrder(res.data.data);
+          setBillStyle(res.data.data.billStyle || null);
+          setNotesInput(res.data.data.notes || '');
         } else {
           Alert.alert('Error', 'Failed to load order.');
         }
@@ -94,7 +105,8 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
         paymentAmount: order.paymentAmount || 0,
         goldPayWeight: order.goldPayWeight || 0,
         goldPayPurity: order.goldPayPurity,
-        notes: order.notes || '',
+        notes: notesInput || order.notes || '',
+        billStyle,
       });
       setSaved(true);
       setOrder(res.data);
@@ -107,14 +119,31 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
     }
   };
 
+  const handleSaveBillStyle = async () => {
+    setSavingBillStyle(true);
+    try {
+      const res = await orderAPI.updateBillStyle(order._id, { billStyle, notes: notesInput });
+      if (res.data.success) {
+        setOrder(res.data.data);
+        setEditingBill(false);
+        await onRefresh();
+        Alert.alert('Success', 'Bill Saved Successfully');
+      }
+    } catch (e) {
+      Alert.alert('Error', e.response?.data?.message || 'Failed to save bill.');
+    } finally {
+      setSavingBillStyle(false);
+    }
+  };
+
   const handlePrint = async () => {
     if (printLockRef.current) return;
     printLockRef.current = true;
     setPrinting(true);
     try {
       const orderData = isPreviewMode
-        ? { ...order, customer: order.customer || order.customerId }
-        : { ...order, customer: order.customerId };
+        ? { ...order, customer: order.customer || order.customerId, billStyle }
+        : { ...order, customer: order.customerId, billStyle };
       await OrderPrintService.printThermal(orderData);
     } catch (e) {
       if (!e?.message?.toLowerCase().includes('cancel')) {
@@ -236,13 +265,62 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
           <BillRow label="Advance Given:" value={`+${fmt3(advanceTotalGram)}g`} valueColor="#2E7D32" />
           <BillRow label="New Advance Balance:" value={`${fmt3(advanceBalanceAfter)}g`} bold valueColor="#2E7D32" />
 
-          {notes ? (
+          {editingBill ? (
+            <>
+              <Divider />
+              <Text style={styles.sectionLabel}>NOTES</Text>
+              <TextInput
+                style={styles.notesEditInput}
+                multiline
+                value={notesInput}
+                onChangeText={setNotesInput}
+                placeholder="Add notes for this bill..."
+              />
+            </>
+          ) : notes ? (
             <>
               <Divider />
               <Text style={styles.notesText}>Note: {notes}</Text>
             </>
           ) : null}
         </View>
+
+        {/* Bill Style — Plus/Wastage print layout choice */}
+        <View style={styles.actionRow}>
+          <TouchableOpacity
+            style={[styles.billStyleBtn, { backgroundColor: billStyle === 'PLUS' ? GOLD : '#F0E4CC' }]}
+            onPress={() => setBillStyle('PLUS')}
+          >
+            {billStyle === 'PLUS' && <MaterialCommunityIcons name="check-circle" size={16} color={DARK_BROWN} style={{ marginRight: 4 }} />}
+            <Text style={styles.billStyleBtnText}>Plus Bill</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.billStyleBtn, { backgroundColor: billStyle === 'WASTAGE' ? GOLD : '#F0E4CC' }]}
+            onPress={() => setBillStyle('WASTAGE')}
+          >
+            {billStyle === 'WASTAGE' && <MaterialCommunityIcons name="check-circle" size={16} color={DARK_BROWN} style={{ marginRight: 4 }} />}
+            <Text style={styles.billStyleBtnText}>Wastage Bill</Text>
+          </TouchableOpacity>
+        </View>
+
+        {billStyle && !isPreviewMode && (
+          <View style={styles.actionRow}>
+            <TouchableOpacity style={[styles.printBtn, { backgroundColor: '#8A6B3C' }]} onPress={() => setEditingBill(v => !v)}>
+              <MaterialCommunityIcons name="pencil-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />
+              <Text style={[styles.printBtnText, { color: '#FFF' }]}>{editingBill ? 'Cancel Edit' : 'Edit Bill'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveBillStyle} disabled={savingBillStyle}>
+              {savingBillStyle ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <>
+                  <MaterialCommunityIcons name="content-save" size={18} color="#FFF" style={{ marginRight: 6 }} />
+                  <Text style={styles.saveBtnText}>Save Bill</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Action Buttons */}
         <View style={styles.actionRow}>
@@ -327,6 +405,9 @@ const styles = StyleSheet.create({
   boldText: { fontWeight: '700' },
   orderItemBlock: { marginBottom: 4 },
   notesText: { fontSize: 12, color: '#444', fontStyle: 'italic', marginTop: 4 },
+  notesEditInput: { backgroundColor: '#FDFAF4', borderRadius: 8, borderWidth: 1, borderColor: '#E8D8B8', padding: 10, fontSize: 13, color: '#2E1A00', minHeight: 60, textAlignVertical: 'top' },
+  billStyleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12 },
+  billStyleBtnText: { fontSize: 14, fontWeight: '700', color: DARK_BROWN },
 
   actionRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
   saveBtn: {

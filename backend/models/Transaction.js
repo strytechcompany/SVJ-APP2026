@@ -50,8 +50,9 @@ const PaymentDetailsSchema = new mongoose.Schema({
 });
 
 const WastageProfitSchema = new mongoose.Schema({
-  weight: Number,
+  buyingWeight: Number,
   buyingPercent: Number,
+  sellingWeight: Number,
   sellingPercent: Number,
   bValue: Number,
   sValue: Number,
@@ -120,6 +121,32 @@ const TransactionSchema = new mongoose.Schema(
     // Plus Profit Table (customerCategory !== 'WASTAGE') — internal-only, never rendered on the bill/print
     plusProfit: [PlusProfitSchema],
 
+    // Plus Cash Table (customerCategory !== 'WASTAGE'): one or more Cash (₹) -> Pure
+    // gram conversions (each at its own manually-entered rate), folded into the
+    // Outstanding calculation alongside the Issue/Receipt Pure difference.
+    // plusCashAmount/plusCashRate/plusFinalGram are kept for backward compatibility
+    // (older single-row bills) — plusFinalGram now also doubles as the row-sum total.
+    plusCashAmount: Number,
+    plusCashRate: Number,
+    plusFinalGram: Number,
+    plusCashRows: [{ cash: Number, rate: Number, finalGram: Number }],
+
+    // Plus Gram Table (Gram/Cash toggle set to Gram mode): one or more manually
+    // entered Pure gram amounts, summed into plusTotalGram.
+    plusGramRows: [{ gram: Number }],
+    plusTotalGram: Number,
+
+    // Plus Final Summary's Outstanding (Issue/Receipt Pure + Old/Advance Balance +
+    // Cash/Gram conversions combined) before the optional Remainder Table adjustment.
+    plusOutstanding: Number,
+    // Remainder Table (both Wastage and Plus): an optional final manual adjustment
+    // subtracted from the already-computed balance, with automatic Old Balance <->
+    // Advance Balance conversion on a sign flip. Zero/unset means no effect.
+    wastageSubtractionAmount: Number,
+    plusReminderPure: Number,
+    // Shared reminder — settable from either module's Remainder Table.
+    reminderDate: Date,
+
     // For storing gold rate at the time of transaction
     goldRate: Number,
 
@@ -173,5 +200,20 @@ const TransactionSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Generates the next number in an independent, atomic running sequence for a
+// B2C sub-type: B2CW1, B2CW2... for Wastage, B2CP1, B2CP2... for Plus. Uses
+// the shared Counter collection (findByIdAndUpdate + $inc + upsert) so two
+// concurrent bill saves can never receive the same number.
+TransactionSchema.statics.generateB2CBillNumber = async function (category) {
+  const Counter = require('./Counter');
+  const prefix = category === 'WASTAGE' ? 'B2CW' : 'B2CP';
+  const counter = await Counter.findByIdAndUpdate(
+    `billNo:${prefix}`,
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return `${prefix}${counter.seq}`;
+};
 
 module.exports = mongoose.model('Transaction', TransactionSchema);

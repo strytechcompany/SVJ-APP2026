@@ -99,11 +99,21 @@ const generateHTML = (data) => {
         <div class="section">
           <div class="section-title">3. Wastage Summary</div>
           <table>
-            <tr><th>B Value</th><th class="center">S Value</th><th class="right">Profit</th></tr>
+            <tr>
+              <th>Buying Wt</th><th class="center">Buying %</th><th class="center">B Value</th>
+              <th class="center">Selling Wt</th><th class="center">Selling %</th><th class="center">S Value</th>
+              <th class="right">Profit</th>
+            </tr>
             ${wastageSummary.map(w => `<tr>
-              <td>₹${safeNumber(w.bValue).toFixed(2)}</td><td class="center">₹${safeNumber(w.sValue).toFixed(2)}</td><td class="right green">₹${safeNumber(w.profit).toFixed(2)}</td>
+              <td>${safeNumber(w.buyingWeight).toFixed(3)}g</td><td class="center">${safeNumber(w.buyingPercent)}%</td><td class="center">₹${safeNumber(w.bValue).toFixed(2)}</td>
+              <td class="center">${safeNumber(w.sellingWeight).toFixed(3)}g</td><td class="center">${safeNumber(w.sellingPercent)}%</td><td class="center">₹${safeNumber(w.sValue).toFixed(2)}</td>
+              <td class="right green">₹${safeNumber(w.profit).toFixed(2)}</td>
             </tr>`).join('')}
-            <tr class="total-row"><td class="right">₹${safeNumber(calculations.wastageSummaryBValue).toFixed(2)}</td><td class="right">₹${safeNumber(calculations.wastageSummarySValue).toFixed(2)}</td><td class="right">₹${safeNumber(calculations.wastageSummaryProfit).toFixed(2)}</td></tr>
+            <tr class="total-row">
+              <td></td><td></td><td class="center">₹${safeNumber(calculations.wastageSummaryBValue).toFixed(2)}</td>
+              <td></td><td></td><td class="center">₹${safeNumber(calculations.wastageSummarySValue).toFixed(2)}</td>
+              <td class="right">₹${safeNumber(calculations.wastageSummaryProfit).toFixed(2)}</td>
+            </tr>
           </table>
         </div>
 

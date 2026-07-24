@@ -13,6 +13,7 @@ exports.createOrder = async (req, res) => {
       goldPayWeight,
       goldPayPurity,
       notes,
+      billStyle,
     } = req.body;
 
     if (!customerId) {
@@ -93,6 +94,7 @@ exports.createOrder = async (req, res) => {
       advanceBalanceAfter,
       status: 'Pending',
       notes: notes || '',
+      billStyle: billStyle || null,
       createdBy: req.user._id,
       createdByName: req.user.name || '',
     });
@@ -193,6 +195,35 @@ exports.updateOrderStatus = async (req, res) => {
   } catch (error) {
     console.error('updateOrderStatus error:', error.message);
     res.status(500).json({ success: false, message: 'Server error updating status.' });
+  }
+};
+
+// ─── Update Bill Style (Plus/Wastage print layout) + Notes ────────────────────
+// Purely presentational — never touches items, payment, or balance fields,
+// since those already have real calculated effects on the customer's balance.
+exports.updateBillStyle = async (req, res) => {
+  try {
+    const { billStyle, notes } = req.body;
+    if (billStyle !== undefined && billStyle !== null && !['PLUS', 'WASTAGE'].includes(billStyle)) {
+      return res.status(400).json({ success: false, message: 'billStyle must be PLUS or WASTAGE' });
+    }
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      {
+        $set: {
+          ...(billStyle !== undefined && { billStyle }),
+          ...(notes !== undefined && { notes }),
+        },
+      },
+      { new: true }
+    ).populate('customerId', 'customerName phoneNumber customerType shopName');
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    res.json({ success: true, data: order });
+  } catch (error) {
+    console.error('updateBillStyle error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error updating bill style.' });
   }
 };
 

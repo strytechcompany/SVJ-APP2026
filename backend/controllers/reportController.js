@@ -133,8 +133,9 @@ exports.getReportData = async (req, res) => {
       { $unwind: "$wastageProfit" },
       { $project: {
           _id: 0,
-          weight: "$wastageProfit.weight",
+          buyingWeight: "$wastageProfit.buyingWeight",
           buyingPercent: "$wastageProfit.buyingPercent",
+          sellingWeight: "$wastageProfit.sellingWeight",
           sellingPercent: "$wastageProfit.sellingPercent",
           bValue: "$wastageProfit.bValue",
           sValue: "$wastageProfit.sValue",

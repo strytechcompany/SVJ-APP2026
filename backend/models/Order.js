@@ -55,6 +55,14 @@ const OrderSchema = new mongoose.Schema(
 
     notes: { type: String, trim: true, default: '' },
 
+    // Print/bill-preview layout choice — purely presentational, does not affect
+    // any saved calculation or balance.
+    billStyle: {
+      type: String,
+      enum: ['PLUS', 'WASTAGE', null],
+      default: null,
+    },
+
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdByName: { type: String, default: '' },
   },

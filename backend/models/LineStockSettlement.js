@@ -1,5 +1,47 @@
 const mongoose = require('mongoose');
 
+// PLUS Bill structure — a self-contained, gram-based bill view built on top of
+// the real settlement (soldItems/returnedItems). Purely additive: never
+// touches soldItems, returnedItems, finalBalance, advanceBalance, or the real
+// customer balance updated by createSettlement.
+const PlusBillIssuedItemSchema = new mongoose.Schema({
+  itemName: String,
+  weight: Number,
+  actualTouch: Number,
+  purity: Number,
+});
+const PlusBillReceivedItemSchema = new mongoose.Schema({
+  itemName: String,
+  weight: Number,
+  buyingTouch: Number,
+  purity: Number,
+});
+const PlusBillSchema = new mongoose.Schema({
+  issuedItems: [PlusBillIssuedItemSchema],
+  receivedItems: [PlusBillReceivedItemSchema],
+  oldBalanceBefore: { type: Number, default: 0 },
+  advanceBalanceBefore: { type: Number, default: 0 },
+  oldBalanceAfter: { type: Number, default: 0 },
+  advanceBalanceAfter: { type: Number, default: 0 },
+});
+
+// WASTAGE Bill structure — a self-contained, cash-based bill view (Weight ×
+// manually-entered Rate = Cash). Same additive guarantee as PlusBillSchema.
+const WastageBillItemSchema = new mongoose.Schema({
+  itemName: String,
+  weight: Number,
+  rate: Number,
+  cash: Number,
+});
+const SettlementWastageBillSchema = new mongoose.Schema({
+  issuedItems: [WastageBillItemSchema],
+  receivedItems: [WastageBillItemSchema],
+  oldBalanceBefore: { type: Number, default: 0 },
+  advanceBalanceBefore: { type: Number, default: 0 },
+  oldBalanceAfter: { type: Number, default: 0 },
+  advanceBalanceAfter: { type: Number, default: 0 },
+});
+
 const LineStockSettlementSchema = new mongoose.Schema(
   {
     settlementNumber: {
@@ -68,6 +110,15 @@ const LineStockSettlementSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Print/bill-preview layout choice — purely presentational, does not affect
+    // stock, balance, or any saved calculation.
+    billStyle: {
+      type: String,
+      enum: ['PLUS', 'WASTAGE', null],
+      default: null,
+    },
+    plusBill: PlusBillSchema,
+    wastageBill: SettlementWastageBillSchema,
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

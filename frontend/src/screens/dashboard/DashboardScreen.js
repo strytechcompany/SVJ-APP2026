@@ -6,6 +6,7 @@ import AppHeader from '../../components/AppHeader';
 import GoldRateCard from '../../components/GoldRateCard';
 import QuickAccessGrid from '../../components/QuickAccessGrid';
 import RecentTransactionsList from '../../components/RecentTransactionsList';
+import UpcomingRemindersList from '../../components/UpcomingRemindersList';
 import DashboardExpenseCard from '../../components/DashboardExpenseCard';
 import Sidebar from '../../components/Sidebar';
 
@@ -56,6 +57,7 @@ export default function DashboardScreen({ navigation }) {
         <GoldRateCard />
         <QuickAccessGrid navigation={navigation} />
         <DashboardExpenseCard navigation={navigation} />
+        <UpcomingRemindersList />
         <RecentTransactionsList />
       </ScrollView>
     </View>

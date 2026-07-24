@@ -15,6 +15,39 @@ const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
 const BG = '#F8F4E8';
 
+// Applies a signed cash delta to a customer's Old Balance / Advance pair,
+// auto-converting a sign flip instead of ever leaving either value negative.
+// Mirrors backend/controllers/transactionController.js's computeSignAwareBalance.
+const computeSignAwareBalance = (oldBefore, advanceBefore, delta) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    const newAdvance = safeNumber(advanceBefore - delta);
+    return newAdvance < 0
+      ? { oldAfter: safeNumber(Math.abs(newAdvance)), advanceAfter: 0 }
+      : { oldAfter: 0, advanceAfter: newAdvance };
+  }
+  const newOld = safeNumber(oldBefore + delta);
+  return newOld < 0
+    ? { oldAfter: 0, advanceAfter: safeNumber(advanceBefore + Math.abs(newOld)) }
+    : { oldAfter: newOld, advanceAfter: advanceBefore };
+};
+
+// Remainder Table (Wastage's Subtraction Amount / Plus's Reminder Pure): an
+// optional final adjustment subtracted from whichever balance is currently
+// active, converting a sign flip instead of ever leaving either negative.
+// A subtraction of 0 is a no-op. Mirrors the backend's applyRemainderSubtraction.
+const applyRemainderSubtraction = (oldBalance, advanceBalance, subtraction) => {
+  if (advanceBalance > 0 && oldBalance === 0) {
+    const bal = safeNumber(advanceBalance - subtraction);
+    return bal < 0
+      ? { oldBalance: safeNumber(Math.abs(bal)), advanceBalance: 0 }
+      : { oldBalance: 0, advanceBalance: bal };
+  }
+  const bal = safeNumber(oldBalance - subtraction);
+  return bal < 0
+    ? { oldBalance: 0, advanceBalance: safeNumber(advanceBalance + Math.abs(bal)) }
+    : { oldBalance: bal, advanceBalance: advanceBalance };
+};
+
 export default function BillPreviewScreen({ navigation, route }) {
   const { transactionId, type, previewPayload } = route.params || {};
   const insets = useSafeAreaInsets();
@@ -122,6 +155,9 @@ export default function BillPreviewScreen({ navigation, route }) {
     finalAmount, goldRate, goldPaymentWeight, goldPaymentPurity, goldConvertedAmount,
     oldBalanceBefore, oldBalanceAfter, advanceBalanceBefore, advanceBalanceAfter, convertedGram, gstDetails,
     commonBillNo, isWastage, status, paymentOption,
+    plusCashAmount, plusCashRate, plusFinalGram,
+    plusCashRows = [], plusGramRows = [], plusTotalGram, plusOutstanding,
+    wastageSubtractionAmount, plusReminderPure, reminderDate,
   } = transaction;
 
   // In preview mode customerId is a plain ID string; use transaction.customer instead
@@ -138,10 +174,19 @@ export default function BillPreviewScreen({ navigation, route }) {
   const isGramOnly = isB2DBill;
   // Plus: every non-Wastage B2C bill — a Pure-weight (gram) ledger, no cash/GST involved.
   const isPlusBill = transactionType === 'B2C' && !isWastage;
+  // B2D Final Balance: which single balance type is relevant Before/After
+  // this bill, per the Case 1/2 formula (mirrors TransactionCalculationScreen.js).
+  const b2dPrevIsAdvance = safeNumber(advanceBalanceBefore) > 0 && safeNumber(oldBalanceBefore) === 0;
+  const b2dCurrentIsOld = safeNumber(oldBalanceAfter) > 0;
   // Sanitized wastage cash fields — never let Infinity/-Infinity/NaN reach the bill.
   const safeIssueTotalAmount = safeNumber(issueTotalAmount);
   const safeReceiptTotalAmount = safeNumber(receiptTotalAmount);
   const safeFinalAmount = safeNumber(finalAmount);
+  // Collected Cash (from the Calculation screen's Payment Type card).
+  const safeCollectedCash = safeNumber(collectedAmount);
+  // Wastage: Final Cash mirrors the manually-entered Amount Collected directly
+  // (confirmed business rule) — it no longer nets against Issue/Receipt totals.
+  const netFinalCash = safeCollectedCash;
 
   // Navigates into the same edit-in-place flow already used from Customer
   // Details / Transaction Management — updates the existing bill by
@@ -166,9 +211,22 @@ export default function BillPreviewScreen({ navigation, route }) {
     setSaving(true);
     try {
       const isCollectCash = selectedPaymentOption === 'COLLECT_CASH';
-      const newCollectedAmount = isCollectCash ? safeFinalAmount : 0;
-      const newOutstandingAmount = isCollectCash ? 0 : safeFinalAmount;
-      const newOldBalanceAfter = isCollectCash ? 0 : safeNumber(safeNumber(oldBalanceBefore) + safeFinalAmount);
+      // Total collected = whatever was already collected up front (Calculation
+      // screen) plus the net Final Cash if it's being fully collected now.
+      const newCollectedAmount = isCollectCash ? safeFinalAmount : safeCollectedCash;
+      const newOutstandingAmount = isCollectCash ? 0 : Math.max(0, netFinalCash);
+      let newOldBalanceAfter, newAdvanceBalanceAfter;
+      if (isCollectCash) {
+        newOldBalanceAfter = 0;
+        newAdvanceBalanceAfter = safeNumber(advanceBalanceBefore);
+      } else {
+        const bal = computeSignAwareBalance(safeNumber(oldBalanceBefore), safeNumber(advanceBalanceBefore), netFinalCash);
+        // Remainder Table (optional): Subtraction Amount further reduces
+        // whichever balance the Add-to-Balance decision just landed on.
+        const remainder = applyRemainderSubtraction(bal.oldAfter, bal.advanceAfter, safeNumber(wastageSubtractionAmount));
+        newOldBalanceAfter = remainder.oldBalance;
+        newAdvanceBalanceAfter = remainder.advanceBalance;
+      }
       const newStatus = isCollectCash ? 'PAID' : 'PARTIAL';
 
       let res;
@@ -179,7 +237,10 @@ export default function BillPreviewScreen({ navigation, route }) {
           newWastageProfit: transaction.wastageProfit || [],
           paymentOption: selectedPaymentOption,
           paymentMode: transaction.paymentMode || 'Cash',
-          paymentDetails: { mode: transaction.paymentMode || 'Cash', amount: newCollectedAmount },
+          collectedAmount: safeCollectedCash,
+          paymentDetails: { mode: transaction.paymentMode || 'Cash', amount: safeCollectedCash },
+          wastageSubtractionAmount: safeNumber(wastageSubtractionAmount),
+          reminderDate: reminderDate || null,
         });
       } else {
         res = await transactionAPI.create({
@@ -189,7 +250,7 @@ export default function BillPreviewScreen({ navigation, route }) {
           outstandingAmount: newOutstandingAmount,
           outstandingGram: 0,
           oldBalanceAfter: newOldBalanceAfter,
-          advanceBalanceAfter: safeNumber(advanceBalanceBefore),
+          advanceBalanceAfter: newAdvanceBalanceAfter,
           status: newStatus,
           paymentDetails: { mode: transaction.paymentMode || 'Cash', amount: newCollectedAmount },
         });
@@ -209,6 +270,49 @@ export default function BillPreviewScreen({ navigation, route }) {
       setSaving(false);
     }
   };
+
+  // Wastage: "Current Old/Advance Balance" (Final Summary) — same logic
+  // handleSaveWastageBill uses to decide what actually gets saved.
+  const wastagePreviewStatus = isPreviewMode
+    ? (selectedPaymentOption === 'COLLECT_CASH' ? 'PAID' : selectedPaymentOption === 'ADD_TO_BALANCE' ? 'PARTIAL' : null)
+    : (status || null);
+  let wastageDisplayOldAfter, wastageDisplayAdvanceAfter;
+  if (isPreviewMode) {
+    if (selectedPaymentOption === 'COLLECT_CASH') {
+      wastageDisplayOldAfter = 0;
+      wastageDisplayAdvanceAfter = safeNumber(advanceBalanceBefore);
+    } else if (selectedPaymentOption === 'ADD_TO_BALANCE') {
+      const bal = computeSignAwareBalance(safeNumber(oldBalanceBefore), safeNumber(advanceBalanceBefore), netFinalCash);
+      wastageDisplayOldAfter = bal.oldAfter;
+      wastageDisplayAdvanceAfter = bal.advanceAfter;
+    } else {
+      wastageDisplayOldAfter = safeNumber(oldBalanceBefore);
+      wastageDisplayAdvanceAfter = safeNumber(advanceBalanceBefore);
+    }
+  } else {
+    wastageDisplayOldAfter = safeNumber(oldBalanceAfter);
+    wastageDisplayAdvanceAfter = safeNumber(advanceBalanceAfter);
+  }
+  // Remainder Table: Subtraction Amount only applies within the Add-to-Balance
+  // scenario (matches handleSaveWastageBill) — a no-op once saved, since the
+  // saved oldBalanceAfter/advanceBalanceAfter already include it.
+  const wastageSubtractionVal = safeNumber(wastageSubtractionAmount);
+  const wastageRemainderApplies = isPreviewMode ? selectedPaymentOption === 'ADD_TO_BALANCE' : false;
+  const wastageRemainderResult = wastageRemainderApplies
+    ? applyRemainderSubtraction(wastageDisplayOldAfter, wastageDisplayAdvanceAfter, wastageSubtractionVal)
+    : { oldBalance: wastageDisplayOldAfter, advanceBalance: wastageDisplayAdvanceAfter };
+
+  // Plus: Total Cash (Cash Table's Final Gram sum) and Total Gram (Gram Table
+  // sum), and the Remainder Table's Final Current Balance.
+  const plusTotalCashVal = safeNumber(plusFinalGram);
+  const plusTotalGramVal = safeNumber(plusTotalGram);
+  const plusOutstandingVal = safeNumber(plusOutstanding);
+  const plusReminderPureVal = safeNumber(plusReminderPure);
+  const plusRemainderResult = applyRemainderSubtraction(
+    plusOutstandingVal >= 0 ? plusOutstandingVal : 0,
+    plusOutstandingVal < 0 ? Math.abs(plusOutstandingVal) : 0,
+    plusReminderPureVal
+  );
 
   return (
     <View style={styles.container}>
@@ -248,8 +352,16 @@ export default function BillPreviewScreen({ navigation, route }) {
           <Text style={styles.sectionTitle}>CUSTOMER DETAILS</Text>
           <View style={styles.row}><Text style={styles.mono}>Name:</Text><Text style={styles.mono}>{customerInfo.customerName || '—'}</Text></View>
           <View style={styles.row}><Text style={styles.mono}>Phone:</Text><Text style={styles.mono}>{customerInfo.phoneNumber || '—'}</Text></View>
-          <View style={styles.row}><Text style={styles.mono}>Old Bal:</Text><Text style={styles.mono}>{isWastage ? `₹${safeNumber(oldBalanceBefore).toLocaleString('en-IN', {maximumFractionDigits:2})}` : `${Number(oldBalanceBefore).toFixed(3)}g`}</Text></View>
-          {!isWastage && <View style={styles.row}><Text style={styles.mono}>Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>}
+          {isB2DBill ? (
+            b2dPrevIsAdvance
+              ? <View style={styles.row}><Text style={styles.mono}>Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>
+              : <View style={styles.row}><Text style={styles.mono}>Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceBefore).toFixed(3)}g</Text></View>
+          ) : (
+            <>
+              <View style={styles.row}><Text style={styles.mono}>Old Bal:</Text><Text style={styles.mono}>{isWastage ? `₹${safeNumber(oldBalanceBefore).toLocaleString('en-IN', {maximumFractionDigits:2})}` : `${Number(oldBalanceBefore).toFixed(3)}g`}</Text></View>
+              {!isWastage && <View style={styles.row}><Text style={styles.mono}>Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>}
+            </>
+          )}
 
           <Text style={styles.divider}>--------------------------------</Text>
           <View style={styles.rateBox}>
@@ -415,56 +527,88 @@ export default function BillPreviewScreen({ navigation, route }) {
             </>
           )}
 
+          {isPlusBill && plusCashRows.length > 0 && (
+            <>
+              <Text style={styles.divider}>--------------------------------</Text>
+              <Text style={styles.sectionTitle}>CASH CONVERSION DETAILS</Text>
+              {plusCashRows.map((row, index) => (
+                <View key={index} style={styles.row}>
+                  <Text style={styles.mono}>₹{safeNumber(row.cash).toLocaleString('en-IN')} @ ₹{safeNumber(row.rate)}</Text>
+                  <Text style={styles.monoBold}>{safeNumber(row.finalGram).toFixed(3)}g</Text>
+                </View>
+              ))}
+            </>
+          )}
+
+          {isPlusBill && plusGramRows.length > 0 && (
+            <>
+              <Text style={styles.divider}>--------------------------------</Text>
+              <Text style={styles.sectionTitle}>GRAM DETAILS</Text>
+              {plusGramRows.map((row, index) => (
+                <View key={index} style={styles.row}>
+                  <Text style={styles.mono}>Item {index + 1}</Text>
+                  <Text style={styles.monoBold}>{safeNumber(row.gram).toFixed(3)}g</Text>
+                </View>
+              ))}
+            </>
+          )}
+
           <Text style={styles.divider}>--------------------------------</Text>
           <Text style={styles.sectionTitle}>SUMMARY</Text>
           {isWastage ? (
             <>
               <View style={styles.row}><Text style={styles.mono}>Issue Cash:</Text><Text style={styles.mono}>₹{safeIssueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
               <View style={styles.row}><Text style={styles.mono}>Receipt Cash:</Text><Text style={styles.mono}>- ₹{safeReceiptTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
-              <View style={styles.row}><Text style={styles.monoBold}>FINAL CASH:</Text><Text style={styles.monoBold}>₹{safeFinalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={[styles.mono, {color:'#2E7D32'}]}>Collected Cash:</Text><Text style={[styles.mono, {color:'#2E7D32'}]}>- ₹{safeCollectedCash.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={styles.monoBold}>FINAL CASH:</Text><Text style={styles.monoBold}>₹{netFinalCash.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
               <View style={styles.row}><Text style={styles.mono}>Payment Type:</Text><Text style={styles.mono}>{paymentMode}</Text></View>
-              {(() => {
-                // In preview mode, reflect the locally selected (not-yet-saved) option;
-                // once saved, reflect the transaction's actual stored status.
-                const previewStatus = isPreviewMode
-                  ? (selectedPaymentOption === 'COLLECT_CASH' ? 'PAID' : selectedPaymentOption === 'ADD_TO_BALANCE' ? 'PARTIAL' : null)
-                  : (status || null);
-                if (!previewStatus) return null;
-                const previewBalance = isPreviewMode
-                  ? safeNumber(safeNumber(oldBalanceBefore) + safeFinalAmount)
-                  : safeNumber(oldBalanceAfter);
-                return (
-                  <>
-                    <Text style={styles.dividerDotted}>................................</Text>
-                    <View style={styles.row}><Text style={styles.mono}>Payment Status:</Text><Text style={styles.monoBold}>{previewStatus === 'PAID' ? 'Paid' : 'Balance'}</Text></View>
-                    {previewStatus === 'PARTIAL' && (
-                      <View style={styles.row}><Text style={styles.monoBold}>Balance Amount:</Text><Text style={styles.monoBold}>₹{previewBalance.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
-                    )}
-                  </>
-                );
-              })()}
+              <Text style={styles.dividerDotted}>................................</Text>
+              {wastagePreviewStatus && (
+                <View style={styles.row}><Text style={styles.mono}>Payment Status:</Text><Text style={styles.monoBold}>{wastagePreviewStatus === 'PAID' ? 'Paid' : 'Balance'}</Text></View>
+              )}
+              <View style={styles.row}><Text style={styles.mono}>Previous Old Balance:</Text><Text style={styles.mono}>₹{safeNumber(oldBalanceBefore).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Previous Advance Balance:</Text><Text style={styles.mono}>₹{safeNumber(advanceBalanceBefore).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}>
+                <Text style={[styles.monoBold, {color: wastageDisplayOldAfter > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  {wastageDisplayOldAfter > 0 ? 'Current Old Balance:' : 'Current Advance Balance:'}
+                </Text>
+                <Text style={[styles.monoBold, {color: wastageDisplayOldAfter > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  ₹{(wastageDisplayOldAfter > 0 ? wastageDisplayOldAfter : wastageDisplayAdvanceAfter).toLocaleString('en-IN', {maximumFractionDigits:2})}
+                </Text>
+              </View>
             </>
           ) : isPlusBill ? (
             <>
               <View style={styles.row}><Text style={styles.mono}>Total Issue Pure:</Text><Text style={styles.mono}>{safeNumber(issueTotalPurity).toFixed(3)}g</Text></View>
               <View style={styles.row}><Text style={styles.mono}>Total Receipt Pure:</Text><Text style={styles.mono}>- {safeNumber(receiptTotalPurity).toFixed(3)}g</Text></View>
-              <View style={styles.row}>
-                <Text style={styles.monoBold}>DIFFERENCE:</Text>
-                <Text style={styles.monoBold}>{Math.abs(safeNumber(issueTotalPurity) - safeNumber(receiptTotalPurity)).toFixed(3)}g</Text>
-              </View>
+              <View style={styles.row}><Text style={styles.mono}>Total Cash:</Text><Text style={styles.mono}>- {plusTotalCashVal.toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Total Gram:</Text><Text style={styles.mono}>- {plusTotalGramVal.toFixed(3)}g</Text></View>
               <Text style={styles.dividerDotted}>................................</Text>
-              <View style={styles.row}><Text style={styles.mono}>Old Balance (Before):</Text><Text style={styles.mono}>{Number(oldBalanceBefore).toFixed(3)}g</Text></View>
-              <View style={styles.row}><Text style={styles.mono}>Advance Balance (Before):</Text><Text style={styles.mono}>{Number(advanceBalanceBefore).toFixed(3)}g</Text></View>
-              <View style={styles.row}><Text style={styles.monoBold}>Old Balance (After):</Text><Text style={styles.monoBold}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
-              <View style={styles.row}><Text style={styles.monoBold}>Advance Balance (After):</Text><Text style={styles.monoBold}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
+              <View style={styles.row}>
+                <Text style={styles.mono}>{advanceBalanceBefore > 0 && oldBalanceBefore === 0 ? 'Previous Advance Balance:' : 'Previous Old Balance:'}</Text>
+                <Text style={styles.mono}>{Number(advanceBalanceBefore > 0 && oldBalanceBefore === 0 ? advanceBalanceBefore : oldBalanceBefore).toFixed(3)}g</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.monoBold}>OUTSTANDING:</Text>
+                <Text style={styles.monoBold}>{Math.abs(plusOutstandingVal).toFixed(3)}g</Text>
+              </View>
             </>
           ) : isGramOnly ? (
             <>
               <View style={styles.row}><Text style={styles.mono}>Issue Gram:</Text><Text style={styles.mono}>{issueTotalPurity.toFixed(3)}g</Text></View>
               <View style={styles.row}><Text style={styles.mono}>Receipt Gram:</Text><Text style={styles.mono}>- {receiptTotalPurity.toFixed(3)}g</Text></View>
+              <Text style={styles.dividerDotted}>................................</Text>
               <View style={styles.row}>
-                <Text style={styles.monoBold}>OUTSTANDING BALANCE:</Text>
-                <Text style={styles.monoBold}>{Math.abs(transaction.balanceAmount || (issueTotalPurity - receiptTotalPurity)).toFixed(3)}g</Text>
+                <Text style={styles.mono}>{b2dPrevIsAdvance ? 'Previous Advance Balance:' : 'Previous Old Balance:'}</Text>
+                <Text style={styles.mono}>{(b2dPrevIsAdvance ? safeNumber(advanceBalanceBefore) : safeNumber(oldBalanceBefore)).toFixed(3)}g</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={[styles.monoBold, {color: b2dCurrentIsOld ? '#D32F2F' : '#2E7D32'}]}>
+                  {b2dCurrentIsOld ? 'Current Old Balance:' : 'Current Advance Balance:'}
+                </Text>
+                <Text style={[styles.monoBold, {color: b2dCurrentIsOld ? '#D32F2F' : '#2E7D32'}]}>
+                  {(b2dCurrentIsOld ? safeNumber(oldBalanceAfter) : safeNumber(advanceBalanceAfter)).toFixed(3)}g
+                </Text>
               </View>
             </>
           ) : (
@@ -492,7 +636,46 @@ export default function BillPreviewScreen({ navigation, route }) {
             </>
           )}
 
-          {!isPlusBill && (
+          {isWastage && (
+            <>
+              <Text style={styles.divider}>--------------------------------</Text>
+              <Text style={styles.sectionTitle}>REMAINDER TABLE</Text>
+              <View style={styles.row}><Text style={styles.mono}>Subtraction Amount:</Text><Text style={styles.mono}>₹{wastageSubtractionVal.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+              <View style={styles.row}>
+                <Text style={[styles.monoBold, {color: wastageRemainderResult.oldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  {wastageRemainderResult.oldBalance > 0 ? 'Current Old Balance:' : 'Current Advance Balance:'}
+                </Text>
+                <Text style={[styles.monoBold, {color: wastageRemainderResult.oldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  ₹{(wastageRemainderResult.oldBalance > 0 ? wastageRemainderResult.oldBalance : wastageRemainderResult.advanceBalance).toLocaleString('en-IN', {maximumFractionDigits:2})}
+                </Text>
+              </View>
+              {reminderDate && (
+                <View style={styles.row}><Text style={styles.mono}>Reminder Date:</Text><Text style={styles.mono}>{new Date(reminderDate).toLocaleDateString('en-GB')}</Text></View>
+              )}
+            </>
+          )}
+
+          {isPlusBill && (
+            <>
+              <Text style={styles.divider}>--------------------------------</Text>
+              <Text style={styles.sectionTitle}>REMAINDER TABLE</Text>
+              <View style={styles.row}><Text style={styles.mono}>Outstanding:</Text><Text style={styles.mono}>{Math.abs(plusOutstandingVal).toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.mono}>Reminder Pure:</Text><Text style={styles.mono}>{plusReminderPureVal.toFixed(3)}g</Text></View>
+              <View style={styles.row}>
+                <Text style={[styles.monoBold, {color: plusRemainderResult.oldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  {plusRemainderResult.oldBalance > 0 ? 'Final Current Old Balance:' : 'Final Current Advance Balance:'}
+                </Text>
+                <Text style={[styles.monoBold, {color: plusRemainderResult.oldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>
+                  {(plusRemainderResult.oldBalance > 0 ? plusRemainderResult.oldBalance : plusRemainderResult.advanceBalance).toFixed(3)}g
+                </Text>
+              </View>
+              {reminderDate && (
+                <View style={styles.row}><Text style={styles.mono}>Reminder Date:</Text><Text style={styles.mono}>{new Date(reminderDate).toLocaleDateString('en-GB')}</Text></View>
+              )}
+            </>
+          )}
+
+          {!isPlusBill && !isWastage && (
             <>
               <Text style={styles.divider}>--------------------------------</Text>
               <Text style={styles.sectionTitle}>TRANSACTION SUMMARY</Text>
@@ -512,9 +695,16 @@ export default function BillPreviewScreen({ navigation, route }) {
                   )}
                 </>
               )}
-              <View style={styles.row}><Text style={styles.mono}>New Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
-              {!isGramOnly && (
-                <View style={styles.row}><Text style={styles.mono}>New Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
+              {isGramOnly ? (
+                <View style={styles.row}>
+                  <Text style={styles.mono}>{b2dCurrentIsOld ? 'New Old Bal:' : 'New Advance Bal:'}</Text>
+                  <Text style={styles.mono}>{Number(b2dCurrentIsOld ? oldBalanceAfter : advanceBalanceAfter).toFixed(3)}g</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.row}><Text style={styles.mono}>New Old Bal:</Text><Text style={styles.mono}>{Number(oldBalanceAfter).toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.mono}>New Advance:</Text><Text style={styles.mono}>{Number(advanceBalanceAfter).toFixed(3)}g</Text></View>
+                </>
               )}
             </>
           )}
@@ -817,6 +1007,14 @@ export default function BillPreviewScreen({ navigation, route }) {
                       newReceiptItems: transaction.receiptItems || [],
                       newWastageProfit: transaction.wastageProfit || [],
                       newPlusProfit: transaction.plusProfit || [],
+                      plusCashAmount: transaction.plusCashAmount || 0,
+                      plusCashRate: transaction.plusCashRate || 0,
+                      plusFinalGram: transaction.plusFinalGram || 0,
+                      plusCashRows: transaction.plusCashRows || [],
+                      plusGramRows: transaction.plusGramRows || [],
+                      plusTotalGram: transaction.plusTotalGram || 0,
+                      plusReminderPure: transaction.plusReminderPure || 0,
+                      reminderDate: transaction.reminderDate || null,
                       receiptTotalWeight: transaction.receiptTotalWeight || 0,
                       receiptTotalAmount: transaction.receiptTotalAmount || 0,
                       collectedAmount: transaction.collectedAmount || 0,

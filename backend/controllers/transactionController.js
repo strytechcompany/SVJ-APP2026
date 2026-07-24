@@ -15,6 +15,113 @@ const sanitizeCashItems = (items) =>
     ...(item.rate !== undefined && { rate: safeNumber(item.rate) }),
   }));
 
+// Applies a signed delta (cash for Wastage, Pure grams for Plus) to a customer's
+// Old Balance / Advance pair, auto-converting a sign flip instead of ever
+// leaving either value negative:
+//   Old Balance = Previous Old Balance + delta; if it goes negative, the
+//   overflow becomes Advance instead.
+//   If the customer currently holds an Advance instead, the delta is
+//   subtracted from it; if that goes negative, the overflow becomes Old Balance.
+const computeSignAwareBalance = (oldBefore, advanceBefore, delta) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    const newAdvance = safeNumber(advanceBefore - delta);
+    return newAdvance < 0
+      ? { oldAfter: safeNumber(Math.abs(newAdvance)), advanceAfter: 0 }
+      : { oldAfter: 0, advanceAfter: newAdvance };
+  }
+  const newOld = safeNumber(oldBefore + delta);
+  return newOld < 0
+    ? { oldAfter: 0, advanceAfter: safeNumber(advanceBefore + Math.abs(newOld)) }
+    : { oldAfter: newOld, advanceAfter: advanceBefore };
+};
+
+// Remainder Table (Wastage's Subtraction Amount / Plus's Reminder Pure): an
+// optional final adjustment subtracted from whichever balance is currently
+// active, converting a sign flip instead of ever leaving either negative.
+// A subtraction of 0 is a no-op (returns the balance unchanged).
+const applyRemainderSubtraction = (oldBalance, advanceBalance, subtraction) => {
+  if (advanceBalance > 0 && oldBalance === 0) {
+    const bal = safeNumber(advanceBalance - subtraction);
+    return bal < 0
+      ? { oldBalance: safeNumber(Math.abs(bal)), advanceBalance: 0 }
+      : { oldBalance: 0, advanceBalance: bal };
+  }
+  const bal = safeNumber(oldBalance - subtraction);
+  return bal < 0
+    ? { oldBalance: 0, advanceBalance: safeNumber(advanceBalance + Math.abs(bal)) }
+    : { oldBalance: bal, advanceBalance: advanceBalance };
+};
+
+// Plus Final Summary's Outstanding: combines Issue/Receipt Pure with the
+// Cash Table + Gram Table conversions (both treated as payments reducing
+// what's owed) and whichever balance the customer currently holds.
+const computePlusOutstanding = (issuePure, receiptPure, totalCash, totalGram, oldBefore, advanceBefore) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    // Case 2: customer holds an Advance.
+    const outstanding = safeNumber(issuePure - (advanceBefore + receiptPure + totalCash + totalGram));
+    return outstanding < 0
+      ? { outstanding, oldAfter: safeNumber(Math.abs(outstanding)), advanceAfter: 0 }
+      : { outstanding, oldAfter: 0, advanceAfter: outstanding };
+  }
+  // Case 1: customer holds an Old Balance (or neither).
+  const outstanding = safeNumber((issuePure + oldBefore) - (receiptPure + totalCash + totalGram));
+  return outstanding < 0
+    ? { outstanding, oldAfter: 0, advanceAfter: safeNumber(Math.abs(outstanding)) }
+    : { outstanding, oldAfter: outstanding, advanceAfter: 0 };
+};
+
+// B2D Final Balance: gram-only ledger, no cash. Case 1 (customer holds an Old
+// Balance, or neither): Final = (Old Balance + Receipt Gram) - Issue Gram.
+// Case 2 (customer holds an Advance): Final = Receipt Gram - (Advance - Issue Gram).
+// Either case auto-converts a sign flip instead of ever leaving the result negative.
+const computeB2DBalance = (oldBefore, advanceBefore, issueGram, receiptGram) => {
+  if (advanceBefore > 0 && oldBefore === 0) {
+    const final = safeNumber(receiptGram - (advanceBefore - issueGram));
+    return final < 0
+      ? { oldAfter: safeNumber(Math.abs(final)), advanceAfter: 0 }
+      : { oldAfter: 0, advanceAfter: final };
+  }
+  const final = safeNumber((oldBefore + receiptGram) - issueGram);
+  return final < 0
+    ? { oldAfter: 0, advanceAfter: safeNumber(Math.abs(final)) }
+    : { oldAfter: final, advanceAfter: 0 };
+};
+
+// Reserves and returns the next number in the independent B2C Wastage (B2CW#)
+// or Plus (B2CP#) bill sequence. Called once a new bill's category is known,
+// before the bill is saved, so BillPreview can display the real number.
+exports.getNextBillNumber = async (req, res) => {
+  try {
+    const { category } = req.query;
+    if (!['WASTAGE', 'PLUS'].includes(category)) {
+      return res.status(400).json({ success: false, message: 'category must be WASTAGE or PLUS' });
+    }
+    const billNo = await Transaction.generateB2CBillNumber(category);
+    res.json({ success: true, data: { billNo } });
+  } catch (error) {
+    console.error('getNextBillNumber error:', error);
+    res.status(500).json({ success: false, message: 'Server error generating bill number' });
+  }
+};
+
+// Bills whose Remainder Table reminderDate has arrived (today or earlier) —
+// shown on HomeScreen's "Upcoming Reminders" until the bill is settled/edited.
+exports.getUpcomingReminders = async (req, res) => {
+  try {
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+    const reminders = await Transaction.find({
+      reminderDate: { $ne: null, $lte: endOfToday },
+    })
+      .populate('customerId', 'customerName phoneNumber')
+      .sort({ reminderDate: 1 });
+    res.json({ success: true, data: reminders });
+  } catch (error) {
+    console.error('getUpcomingReminders error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching reminders' });
+  }
+};
+
 exports.createTransaction = async (req, res) => {
   try {
     const {
@@ -37,6 +144,16 @@ exports.createTransaction = async (req, res) => {
       isWastage,
       wastageProfit,
       plusProfit,
+      plusCashAmount,
+      plusCashRate,
+      plusFinalGram,
+      plusCashRows,
+      plusGramRows,
+      plusTotalGram,
+      plusOutstanding,
+      wastageSubtractionAmount,
+      plusReminderPure,
+      reminderDate,
       goldRate,
       description,
       paymentMode,
@@ -88,6 +205,16 @@ exports.createTransaction = async (req, res) => {
       isWastage,
       wastageProfit,
       plusProfit,
+      plusCashAmount,
+      plusCashRate,
+      plusFinalGram,
+      plusCashRows,
+      plusGramRows,
+      plusTotalGram,
+      plusOutstanding,
+      wastageSubtractionAmount,
+      plusReminderPure,
+      reminderDate,
       goldRate,
       description,
       paymentMode,
@@ -278,6 +405,10 @@ exports.updateTransaction = async (req, res) => {
 
     const {
       newIssueItems, newReceiptItems, newWastageProfit, newPlusProfit,
+      plusCashAmount: newPlusCashAmount, plusCashRate: newPlusCashRate, plusFinalGram: newPlusFinalGram,
+      plusCashRows: newPlusCashRows, plusGramRows: newPlusGramRows, plusTotalGram: newPlusTotalGram,
+      wastageSubtractionAmount: newWastageSubtractionAmount, plusReminderPure: newPlusReminderPure,
+      reminderDate: newReminderDate,
       receiptTotalWeight: newReceiptTotalWeight, receiptTotalAmount: newReceiptTotalAmount,
       collectedAmount: newCollectedAmount,
       paymentMode: newPaymentMode, paymentDetails: newPaymentDetails,
@@ -373,22 +504,34 @@ exports.updateTransaction = async (req, res) => {
     // Every other flow settles in cash via the generic outstanding-amount math below.
     const isPlusBill = transaction.transactionType === 'B2C' && !transaction.isWastage;
     const isWastageBillWithPaymentOption = transaction.isWastage && !!newPaymentOption;
+    const isB2DBill = transaction.transactionType === 'B2D';
     const effectiveReceiptItemsForPurity = sanitizedNewReceiptItems !== undefined ? sanitizedNewReceiptItems : (transaction.receiptItems || []);
     const newReceiptTotalPurity = parseFloat(effectiveReceiptItemsForPurity.reduce((s, i) => s + (i.purity || 0), 0).toFixed(3));
     const newGramOutstanding = parseFloat((newIssueTotalPurity - newReceiptTotalPurity).toFixed(3));
 
     let newOutstandingAmount, newOldBalanceAfter, newAdvanceBalanceAfter, balanceDelta, advanceDelta;
+    // Plus: Total Cash (Cash Table's Final Gram sum) and Total Gram (Gram Table sum)
+    // both treated as payments reducing what's owed, combined with the Issue/Receipt
+    // Pure difference into the Outstanding formula.
+    const newPlusTotalCash = safeNumber(newPlusFinalGram);
+    const newPlusTotalGramVal = safeNumber(newPlusTotalGram);
+    let newPlusOutstanding;
+    // Wastage: Final Cash mirrors the manually-entered/collected Amount directly
+    // (confirmed business rule) — it no longer nets against Issue/Receipt totals.
+    const wastagePreCollected = collected;
+    const newWastageNetFinalCash = safeNumber(wastagePreCollected);
 
     if (isPlusBill) {
-      const oldBalanceBeforeVal = transaction.oldBalanceBefore || 0;
-      const advanceBalanceBeforeVal = transaction.advanceBalanceBefore || 0;
-      newOldBalanceAfter = oldBalanceBeforeVal;
-      newAdvanceBalanceAfter = advanceBalanceBeforeVal;
-      if (newGramOutstanding > 0) {
-        newOldBalanceAfter = parseFloat((oldBalanceBeforeVal + newGramOutstanding).toFixed(3));
-      } else if (newGramOutstanding < 0) {
-        newAdvanceBalanceAfter = parseFloat((advanceBalanceBeforeVal + Math.abs(newGramOutstanding)).toFixed(3));
-      }
+      const outcome = computePlusOutstanding(
+        newIssueTotalPurity, newReceiptTotalPurity, newPlusTotalCash, newPlusTotalGramVal,
+        safeNumber(transaction.oldBalanceBefore || 0), safeNumber(transaction.advanceBalanceBefore || 0)
+      );
+      newPlusOutstanding = outcome.outstanding;
+      // Remainder Table (optional): Reminder Pure further reduces whichever
+      // balance the Outstanding calc just landed on.
+      const remainder = applyRemainderSubtraction(outcome.oldAfter, outcome.advanceAfter, safeNumber(newPlusReminderPure));
+      newOldBalanceAfter = remainder.oldBalance;
+      newAdvanceBalanceAfter = remainder.advanceBalance;
       newOutstandingAmount = 0;
       balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(3));
       advanceDelta = parseFloat((newAdvanceBalanceAfter - (transaction.advanceBalanceAfter || 0)).toFixed(3));
@@ -397,15 +540,38 @@ exports.updateTransaction = async (req, res) => {
         collected = newFinalAmount;
         newOutstandingAmount = 0;
         newOldBalanceAfter = 0;
+        newAdvanceBalanceAfter = safeNumber(transaction.advanceBalanceBefore || 0);
       } else {
-        // ADD_TO_BALANCE: Final Cash becomes the customer's outstanding balance.
-        collected = 0;
-        newOutstandingAmount = newFinalAmount;
-        newOldBalanceAfter = safeNumber(parseFloat(((transaction.oldBalanceBefore || 0) + newFinalAmount).toFixed(2)));
+        // ADD_TO_BALANCE: only the net Final Cash (after any up-front collection)
+        // flows into the balance, with automatic Old Balance <-> Advance conversion.
+        collected = wastagePreCollected;
+        newOutstandingAmount = Math.max(0, newWastageNetFinalCash);
+        const bal = computeSignAwareBalance(
+          safeNumber(transaction.oldBalanceBefore || 0),
+          safeNumber(transaction.advanceBalanceBefore || 0),
+          newWastageNetFinalCash
+        );
+        // Remainder Table (optional): Subtraction Amount further reduces
+        // whichever balance the Add-to-Balance decision just landed on.
+        const remainder = applyRemainderSubtraction(bal.oldAfter, bal.advanceAfter, safeNumber(newWastageSubtractionAmount));
+        newOldBalanceAfter = remainder.oldBalance;
+        newAdvanceBalanceAfter = remainder.advanceBalance;
       }
-      newAdvanceBalanceAfter = transaction.advanceBalanceAfter;
       balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(2));
-      advanceDelta = 0;
+      advanceDelta = parseFloat((newAdvanceBalanceAfter - (transaction.advanceBalanceAfter || 0)).toFixed(2));
+    } else if (isB2DBill) {
+      // Gram-only ledger, Case 1/2 with automatic Old Balance <-> Advance conversion.
+      const bal = computeB2DBalance(
+        safeNumber(transaction.oldBalanceBefore || 0),
+        safeNumber(transaction.advanceBalanceBefore || 0),
+        newIssueTotalPurity,
+        newReceiptTotalPurity
+      );
+      newOldBalanceAfter = bal.oldAfter;
+      newAdvanceBalanceAfter = bal.advanceAfter;
+      newOutstandingAmount = 0;
+      balanceDelta = parseFloat((newOldBalanceAfter - (transaction.oldBalanceAfter || 0)).toFixed(3));
+      advanceDelta = parseFloat((newAdvanceBalanceAfter - (transaction.advanceBalanceAfter || 0)).toFixed(3));
     } else {
       newOutstandingAmount = safeNumber(parseFloat(Math.max(0, newFinalAmount - collected).toFixed(2)));
       newOldBalanceAfter = safeNumber(parseFloat(((transaction.oldBalanceBefore || 0) + newOutstandingAmount).toFixed(2)));
@@ -415,9 +581,11 @@ exports.updateTransaction = async (req, res) => {
     }
 
     const newStatus = isPlusBill
-      ? (newGramOutstanding > 0 ? 'PARTIAL' : 'PAID')
+      ? (newOldBalanceAfter > 0 ? 'PARTIAL' : 'PAID')
       : isWastageBillWithPaymentOption
       ? (newPaymentOption === 'COLLECT_CASH' ? 'PAID' : 'PARTIAL')
+      : isB2DBill
+      ? (newOldBalanceAfter > 0 ? 'PARTIAL' : 'PAID')
       : (newOutstandingAmount <= 0 ? 'PAID' : 'PARTIAL');
 
     // Delta for customer balance
@@ -453,6 +621,16 @@ exports.updateTransaction = async (req, res) => {
           receiptTotalPurity: newReceiptTotalPurity,
           ...(newWastageProfit !== undefined && { wastageProfit: newWastageProfit }),
           ...(newPlusProfit !== undefined && { plusProfit: newPlusProfit }),
+          ...(newPlusCashAmount !== undefined && { plusCashAmount: newPlusCashAmount }),
+          ...(newPlusCashRate !== undefined && { plusCashRate: newPlusCashRate }),
+          ...(newPlusFinalGram !== undefined && { plusFinalGram: newPlusFinalGram }),
+          ...(newPlusCashRows !== undefined && { plusCashRows: newPlusCashRows }),
+          ...(newPlusGramRows !== undefined && { plusGramRows: newPlusGramRows }),
+          ...(newPlusTotalGram !== undefined && { plusTotalGram: newPlusTotalGramVal }),
+          ...(isPlusBill && { plusOutstanding: newPlusOutstanding }),
+          ...(newWastageSubtractionAmount !== undefined && { wastageSubtractionAmount: safeNumber(newWastageSubtractionAmount) }),
+          ...(newPlusReminderPure !== undefined && { plusReminderPure: safeNumber(newPlusReminderPure) }),
+          ...(newReminderDate !== undefined && { reminderDate: newReminderDate }),
           transactionSubtype: newSubtype,
           finalAmount: newFinalAmount,
           collectedAmount: collected,
