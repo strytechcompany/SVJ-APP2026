@@ -195,6 +195,14 @@ const TransactionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    // "Clear" on the HomeScreen's Recent Transactions list only ever sets this
+    // flag — it never deletes the record, so Bill History/Reports/Stock (which
+    // never filter on it) are completely unaffected.
+    hiddenFromRecent: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

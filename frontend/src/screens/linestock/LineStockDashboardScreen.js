@@ -33,6 +33,7 @@ export default function LineStockDashboardScreen({ navigation }) {
   const [search, setSearch] = useState('');
   const [deletingId, setDeletingId] = useState(null);
   const [clearingAll, setClearingAll] = useState(false);
+  const [openingSettlementId, setOpeningSettlementId] = useState(null);
 
   const searchTimeout = useRef(null);
 
@@ -70,6 +71,23 @@ export default function LineStockDashboardScreen({ navigation }) {
 
   const handleEdit = (item) => {
     navigation.navigate('IssueLineStock', { editTransactionId: item._id, prefilledData: item });
+  };
+
+  // Opens the saved Settlement bill (Plus/Wastage) for a settled transaction
+  // so the admin can edit and re-save it — reopens the exact same screen used
+  // right after settling, loaded with all previously saved values.
+  const handleEditSettlement = async (item) => {
+    setOpeningSettlementId(item._id);
+    try {
+      const res = await lineStockAPI.getSettlementByTransactionId(item._id);
+      if (res.data.success) {
+        navigation.navigate('LineStockSettlementBillPreview', { settlementId: res.data.data._id });
+      }
+    } catch (e) {
+      Alert.alert('Error', e.response?.data?.message || 'Could not open the settlement bill.');
+    } finally {
+      setOpeningSettlementId(null);
+    }
   };
 
   const handleDelete = (item) => {
@@ -176,10 +194,26 @@ export default function LineStockDashboardScreen({ navigation }) {
             </View>
           </View>
           <View style={styles.rowActions}>
-            <TouchableOpacity style={styles.editBtn} onPress={() => handleEdit(item)}>
-              <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
-              <Text style={styles.editBtnText}>Edit</Text>
-            </TouchableOpacity>
+            {item.status === 'SETTLED' ? (
+              <TouchableOpacity
+                style={styles.editBtn}
+                onPress={() => handleEditSettlement(item)}
+                disabled={openingSettlementId === item._id}
+              >
+                {openingSettlementId === item._id
+                  ? <ActivityIndicator size="small" color={DARK_BROWN} />
+                  : <>
+                      <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
+                      <Text style={styles.editBtnText}>Edit Settlement</Text>
+                    </>
+                }
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.editBtn} onPress={() => handleEdit(item)}>
+                <MaterialCommunityIcons name="pencil-outline" size={14} color={DARK_BROWN} />
+                <Text style={styles.editBtnText}>Edit</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={styles.deleteBtn}
               onPress={() => handleDelete(item)}

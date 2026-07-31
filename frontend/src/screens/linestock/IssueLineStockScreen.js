@@ -7,6 +7,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { customerAPI, lineStockAPI, stockAPI } from '../../services/api';
+import { resolveDisplayBalance } from '../../utils/balanceDisplay';
+
+// "B2C Plus" / "B2C Wastage" / "B2D" / "Line Stock" — matches the Customer
+// Type label the Line Stock Issue autocomplete must show per customer.
+const getCustomerTypeLabel = (c) => {
+  if (!c) return '';
+  if (c.customerType === 'B2C') return c.customerCategory === 'WASTAGE' ? 'B2C Wastage' : 'B2C Plus';
+  if (c.customerType === 'B2D') return 'B2D';
+  if (c.customerType === 'LINE_STOCKER') return 'Line Stock';
+  return c.customerType || '';
+};
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -162,30 +173,31 @@ export default function IssueLineStockScreen({ navigation, route }) {
 
   const handleBarcodeSubmit = () => lookupAndAddStock(barcodeSearch);
 
+  const [isSearchingCustomer, setIsSearchingCustomer] = useState(false);
+  const customerSearchTimeout = useRef(null);
+
+  // Autocomplete search across ALL customer types (B2C Plus, B2C Wastage, B2D,
+  // Line Stock) — matches by name or phone, refetched fresh from MongoDB on
+  // every keystroke so the balance shown is always the latest saved value.
   useEffect(() => {
-    // Load LINE_STOCKER customers
-    const loadCustomers = async () => {
+    if (customerSearch.trim().length < 2) {
+      setCustomers([]);
+      return;
+    }
+    if (customerSearchTimeout.current) clearTimeout(customerSearchTimeout.current);
+    customerSearchTimeout.current = setTimeout(async () => {
+      setIsSearchingCustomer(true);
       try {
-        const res = await customerAPI.getByType('LINE_STOCKER', { limit: 100 });
-        if (res.data.success) {
-          setCustomers(res.data.data);
-        }
+        const res = await customerAPI.search({ q: customerSearch.trim(), limit: 15 });
+        if (res.data.success) setCustomers(res.data.data);
       } catch (e) {
         console.error(e);
+      } finally {
+        setIsSearchingCustomer(false);
       }
-    };
-    loadCustomers();
-  }, []);
-
-  const filteredCustomers = customers.filter(c => {
-    const q = customerSearch.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      (c.customerName || '').toLowerCase().includes(q) ||
-      (c.phoneNumber || '').includes(q) ||
-      (c.customerCode || '').toLowerCase().includes(q)
-    );
-  });
+    }, 300);
+    return () => clearTimeout(customerSearchTimeout.current);
+  }, [customerSearch]);
 
   const handleSelectCustomer = (c) => {
     setSelectedCustomer(c);
@@ -228,6 +240,24 @@ export default function IssueLineStockScreen({ navigation, route }) {
 
   const totalItems = issuedProducts.reduce((sum, p) => sum + p.count, 0);
   const totalGram = issuedProducts.reduce((sum, p) => sum + p.weight, 0);
+
+  // Projection only, shown here before the bill is actually saved — the real
+  // commit happens on the Bill Preview screen's "Save Bill" (Plus style).
+  // Case 1 (Old Balance active): Current Old = Previous Old + Issued.
+  // Case 2 (Advance active): Current Advance = Previous Advance - Issued;
+  // converts to Old Balance (absolute value) once fully consumed.
+  const previousOldBalance = selectedCustomer ? Number(selectedCustomer.oldBalance) || 0 : 0;
+  const previousAdvanceBalance = selectedCustomer ? Number(selectedCustomer.advance) || 0 : 0;
+  let projectedOldBalance, projectedAdvanceBalance;
+  if (previousAdvanceBalance > 0 && previousOldBalance === 0) {
+    const net = totalGram - previousAdvanceBalance;
+    if (net < 0) { projectedAdvanceBalance = Math.abs(net); projectedOldBalance = 0; }
+    else { projectedAdvanceBalance = 0; projectedOldBalance = net; }
+  } else {
+    const net = totalGram + previousOldBalance;
+    if (net < 0) { projectedOldBalance = 0; projectedAdvanceBalance = Math.abs(net); }
+    else { projectedOldBalance = net; projectedAdvanceBalance = 0; }
+  }
 
   const handleIssue = async () => {
     if (!selectedCustomer) {
@@ -344,34 +374,50 @@ export default function IssueLineStockScreen({ navigation, route }) {
 
               {showCustomerDropdown && (
                 <View style={styles.autocompleteDropdown}>
-                  {filteredCustomers.length > 0 ? (
-                    filteredCustomers.map(c => (
-                      <TouchableOpacity
-                        key={c._id}
-                        style={styles.autocompleteItem}
-                        onPress={() => handleSelectCustomer(c)}
-                      >
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.autocompleteTitle}>{c.customerName}</Text>
-                          <Text style={styles.autocompleteSub}>{c.phoneNumber}{c.customerCode ? `  |  ${c.customerCode}` : ''}</Text>
-                        </View>
-                      </TouchableOpacity>
-                    ))
+                  {isSearchingCustomer ? (
+                    <View style={[styles.autocompleteItem, { justifyContent: 'center' }]}>
+                      <ActivityIndicator size="small" color={GOLD} />
+                    </View>
+                  ) : customers.length > 0 ? (
+                    customers.map(c => {
+                      const { label, value } = resolveDisplayBalance(c.oldBalance, c.advance);
+                      const balanceColor = label === 'Old Balance' ? '#D32F2F' : label === 'Advance' ? '#2E7D32' : DARK_BROWN;
+                      return (
+                        <TouchableOpacity
+                          key={c._id}
+                          style={styles.autocompleteItem}
+                          onPress={() => handleSelectCustomer(c)}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.autocompleteTitle}>{c.customerName}</Text>
+                            <Text style={styles.autocompleteSub}>{c.phoneNumber} · {getCustomerTypeLabel(c)}</Text>
+                            <Text style={[styles.autocompleteSub, { color: balanceColor, fontWeight: '700', marginTop: 2 }]}>
+                              {label}: {value.toFixed(3)}g
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })
                   ) : (
                     <View style={styles.autocompleteItem}>
-                      <Text style={styles.autocompleteSub}>No Line Stocker matches your search.</Text>
+                      <Text style={styles.autocompleteSub}>
+                        {customerSearch.trim().length < 2 ? 'Type at least 2 characters to search.' : 'No customer matches your search.'}
+                      </Text>
                     </View>
                   )}
                 </View>
               )}
             </View>
           )}
-          {selectedCustomer && (
-            <View style={styles.selectedCustomerInfo}>
-              <View style={styles.infoRow}><Text style={styles.infoLabel}>Current Old Balance:</Text><Text style={styles.infoValue}>{Number(selectedCustomer.oldBalance).toFixed(3)}g</Text></View>
-              <View style={styles.infoRow}><Text style={styles.infoLabel}>Current Advance:</Text><Text style={styles.infoValue}>{Number(selectedCustomer.advance).toFixed(3)}g</Text></View>
-            </View>
-          )}
+          {selectedCustomer && (() => {
+            const { label, value } = resolveDisplayBalance(selectedCustomer.oldBalance, selectedCustomer.advance);
+            return (
+              <View style={styles.selectedCustomerInfo}>
+                <View style={styles.infoRow}><Text style={styles.infoLabel}>Customer Type:</Text><Text style={styles.infoValue}>{getCustomerTypeLabel(selectedCustomer)}</Text></View>
+                <View style={styles.infoRow}><Text style={styles.infoLabel}>{label}:</Text><Text style={styles.infoValue}>{value.toFixed(3)}g</Text></View>
+              </View>
+            );
+          })()}
         </View>
 
         {/* Dates */}
@@ -487,8 +533,16 @@ export default function IssueLineStockScreen({ navigation, route }) {
           <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Items Issued</Text><Text style={styles.summaryValue}>{totalItems}</Text></View>
           <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Gram Issued</Text><Text style={styles.summaryValue}>{totalGram.toFixed(3)}g</Text></View>
           <View style={styles.divider} />
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Old Balance Before</Text><Text style={styles.summaryValue}>{selectedCustomer ? Number(selectedCustomer.oldBalance).toFixed(3) : '0.000'}g</Text></View>
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Old Balance After</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>{selectedCustomer ? (Number(selectedCustomer.oldBalance) + totalGram).toFixed(3) : '0.000'}g</Text></View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>{previousAdvanceBalance > 0 ? 'Advance Balance Before' : 'Old Balance Before'}</Text>
+            <Text style={styles.summaryValue}>{(previousAdvanceBalance > 0 ? previousAdvanceBalance : previousOldBalance).toFixed(3)}g</Text>
+          </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>{projectedAdvanceBalance > 0 ? 'Advance Balance After (Projected)' : 'Old Balance After (Projected)'}</Text>
+            <Text style={[styles.summaryValue, { color: projectedAdvanceBalance > 0 ? '#27AE60' : '#D32F2F' }]}>
+              {(projectedAdvanceBalance > 0 ? projectedAdvanceBalance : projectedOldBalance).toFixed(3)}g
+            </Text>
+          </View>
         </View>
 
         {/* Submit Button */}

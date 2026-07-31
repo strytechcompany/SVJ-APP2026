@@ -16,7 +16,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useCustomer } from '../../context/CustomerContext';
 import { useAuth } from '../../context/AuthContext';
-import { resolveDisplayBalance } from '../../utils/balanceDisplay';
+import { resolveDisplayBalance, formatBalanceForCustomer } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -64,6 +64,9 @@ export default function CustomerDetailScreen({ navigation, route }) {
   const [activeTab, setActiveTab] = useState('Profile');
   const [history, setHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  // Bill History category — only relevant for B2C (Plus vs Wastage) and
+  // Line Stocker (a single combined Issue + Settlement category) customers.
+  const [historyCategory, setHistoryCategory] = useState(null);
 
   const { user: authUser } = useAuth();
   const isAdmin = authUser?.role === 'SuperAdmin' || authUser?.role === 'Admin';
@@ -196,12 +199,22 @@ export default function CustomerDetailScreen({ navigation, route }) {
   const loadHistory = async () => {
     try {
       setLoadingHistory(true);
-      const { transactionAPI, lineStockAPI } = require('../../services/api');
-      
+      const { transactionAPI, lineStockAPI, balanceSettlementAPI } = require('../../services/api');
+
       let combinedHistory = [];
-      
+
+      // Old/Advance Balance Settlement bills apply to every customer type —
+      // fetched alongside whichever type-specific history is loaded below.
+      const balanceSettlementsPromise = Promise.all([
+        balanceSettlementAPI.getSettlementsByCustomer(customerId, 'OLD').catch(() => ({ data: { success: false } })),
+        balanceSettlementAPI.getSettlementsByCustomer(customerId, 'ADVANCE').catch(() => ({ data: { success: false } })),
+      ]);
+
       if (customer.customerType === 'LINE_STOCKER') {
-        const lsRes = await lineStockAPI.getTransactions({ search: customer.customerName, limit: 100 });
+        const [lsRes, settlementRes] = await Promise.all([
+          lineStockAPI.getTransactions({ search: customer.customerName, limit: 100 }),
+          lineStockAPI.getSettlementsByCustomer(customerId).catch(() => ({ data: { success: false } })),
+        ]);
         if (lsRes.data.success) {
           const lsData = lsRes.data.data
             .filter(ls => ls.customerId?._id === customerId)
@@ -214,23 +227,58 @@ export default function CustomerDetailScreen({ navigation, route }) {
             }));
           combinedHistory = [...combinedHistory, ...lsData];
         }
+        if (settlementRes.data.success) {
+          const settlementData = settlementRes.data.data.map(s => ({
+            ...s,
+            historyType: 'LINE_STOCK_SETTLEMENT_BILL',
+            transactionType: 'LINE_STOCK_SETTLEMENT_BILL',
+          }));
+          combinedHistory = [...combinedHistory, ...settlementData];
+        }
+        setHistoryCategory('LINE_STOCK');
       } else {
         const res = await transactionAPI.getByCustomer(customerId);
         if (res.data.success) {
           combinedHistory = [...combinedHistory, ...res.data.data];
         }
+        if (customer.customerType === 'B2C') {
+          setHistoryCategory(prev => prev === 'PLUS' || prev === 'WASTAGE' ? prev : 'PLUS');
+        }
       }
-      
+
+      const [oldBalanceRes, advanceBalanceRes] = await balanceSettlementsPromise;
+      if (oldBalanceRes.data.success) {
+        combinedHistory = [...combinedHistory, ...oldBalanceRes.data.data.map(s => ({
+          ...s, historyType: 'OLD_BALANCE_SETTLEMENT_BILL',
+        }))];
+      }
+      if (advanceBalanceRes.data.success) {
+        combinedHistory = [...combinedHistory, ...advanceBalanceRes.data.data.map(s => ({
+          ...s, historyType: 'ADVANCE_BALANCE_SETTLEMENT_BILL',
+        }))];
+      }
+
       // Sort desc by date
       combinedHistory.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       setHistory(combinedHistory);
-      
+
     } catch (e) {
       console.error(e);
     } finally {
       setLoadingHistory(false);
     }
   };
+
+  // Bills filtered down to the currently-selected Bill History category.
+  const isBalanceSettlementBill = (item) =>
+    item.historyType === 'OLD_BALANCE_SETTLEMENT_BILL' || item.historyType === 'ADVANCE_BALANCE_SETTLEMENT_BILL';
+  const displayedHistory = historyCategory === 'OLD_BALANCE_SETTLEMENT'
+    ? history.filter(item => item.historyType === 'OLD_BALANCE_SETTLEMENT_BILL')
+    : historyCategory === 'ADVANCE_BALANCE_SETTLEMENT'
+    ? history.filter(item => item.historyType === 'ADVANCE_BALANCE_SETTLEMENT_BILL')
+    : customer?.customerType === 'B2C'
+    ? history.filter(item => !isBalanceSettlementBill(item) && (historyCategory === 'WASTAGE' ? !!item.isWastage : !item.isWastage))
+    : history.filter(item => !isBalanceSettlementBill(item));
 
   const handleDelete = () => {
     Alert.alert(
@@ -346,7 +394,7 @@ export default function CustomerDetailScreen({ navigation, route }) {
             <View style={styles.balBox}>
               <Text style={styles.balLabel}>{financialBalance.label}</Text>
               <Text style={[styles.balValue, financialBalance.label === 'Advance' && { color: '#2E7D32' }]}>
-                ₹ {financialBalance.value.toFixed(2)}
+                {formatBalanceForCustomer(financialBalance.value, customer)}
               </Text>
             </View>
           </View>
@@ -426,22 +474,65 @@ export default function CustomerDetailScreen({ navigation, route }) {
                 <View style={styles.balBox}>
                   <Text style={styles.balLabel}>{financialBalance.label}</Text>
                   <Text style={[styles.balValue, financialBalance.label === 'Advance' && { color: '#2E7D32' }]}>
-                    ₹ {financialBalance.value.toFixed(2)}
+                    {formatBalanceForCustomer(financialBalance.value, customer)}
                   </Text>
                 </View>
               </View>
             </View>
 
+            {customer.customerType === 'B2C' && (
+              <View style={styles.historyCategoryRow}>
+                <TouchableOpacity
+                  style={[styles.historyCategoryChip, historyCategory === 'PLUS' && styles.historyCategoryChipActive]}
+                  onPress={() => setHistoryCategory('PLUS')}
+                >
+                  <Text style={[styles.historyCategoryText, historyCategory === 'PLUS' && styles.historyCategoryTextActive]}>B2C Plus Bills</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.historyCategoryChip, historyCategory === 'WASTAGE' && styles.historyCategoryChipActive]}
+                  onPress={() => setHistoryCategory('WASTAGE')}
+                >
+                  <Text style={[styles.historyCategoryText, historyCategory === 'WASTAGE' && styles.historyCategoryTextActive]}>B2C Wastage Bills</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {customer.customerType === 'LINE_STOCKER' && (
+              <View style={styles.historyCategoryRow}>
+                <View style={[styles.historyCategoryChip, styles.historyCategoryChipActive]}>
+                  <Text style={[styles.historyCategoryText, styles.historyCategoryTextActive]}>Line Stock Bills</Text>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.historyCategoryRow}>
+              <TouchableOpacity
+                style={[styles.historyCategoryChip, historyCategory === 'OLD_BALANCE_SETTLEMENT' && styles.historyCategoryChipActive]}
+                onPress={() => setHistoryCategory('OLD_BALANCE_SETTLEMENT')}
+              >
+                <Text style={[styles.historyCategoryText, historyCategory === 'OLD_BALANCE_SETTLEMENT' && styles.historyCategoryTextActive]}>Old Balance Settlement Bills</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.historyCategoryChip, historyCategory === 'ADVANCE_BALANCE_SETTLEMENT' && styles.historyCategoryChipActive]}
+                onPress={() => setHistoryCategory('ADVANCE_BALANCE_SETTLEMENT')}
+              >
+                <Text style={[styles.historyCategoryText, historyCategory === 'ADVANCE_BALANCE_SETTLEMENT' && styles.historyCategoryTextActive]}>Advance Balance Settlement Bills</Text>
+              </TouchableOpacity>
+            </View>
+
             {loadingHistory ? (
               <ActivityIndicator color={GOLD} style={{marginTop: 20}}/>
-            ) : history.length === 0 ? (
+            ) : displayedHistory.length === 0 ? (
               <Text style={{textAlign:'center', color:'#888', marginTop: 20}}>No transactions found.</Text>
             ) : (
-              history.map(item => {
+              displayedHistory.map(item => {
                 const isSettlement = item.historyType === 'SETTLEMENT';
-                
+                const isLineStockSettlementBill = item.historyType === 'LINE_STOCK_SETTLEMENT_BILL';
+                const isOldBalanceSettlementBill = item.historyType === 'OLD_BALANCE_SETTLEMENT_BILL';
+                const isAdvanceBalanceSettlementBill = item.historyType === 'ADVANCE_BALANCE_SETTLEMENT_BILL';
+                const isAnySettlementBill = isSettlement || isLineStockSettlementBill || isOldBalanceSettlementBill || isAdvanceBalanceSettlementBill;
+
                 let finalVal = 0, collected = 0, outstanding = 0, status = 'PAID';
-                if (!isSettlement) {
+                if (!isAnySettlementBill) {
                   finalVal = item.finalAmount || 0;
                   collected = item.paymentMode === 'Gold' 
                     ? (item.goldConvertedAmount || 0) 
@@ -453,12 +544,18 @@ export default function CustomerDetailScreen({ navigation, route }) {
                 }
 
                 return (
-                  <TouchableOpacity 
-                    key={item._id} 
-                    style={[styles.infoCard, {padding:12, borderColor: isSettlement ? '#A5D6A7' : '#F0E4CC'}]}
+                  <TouchableOpacity
+                    key={item._id}
+                    style={[styles.infoCard, {padding:12, borderColor: isAnySettlementBill ? '#A5D6A7' : '#F0E4CC'}]}
                     onPress={() => {
-                      if (item.historyType === 'LINE_STOCK') {
+                      if (isOldBalanceSettlementBill || isAdvanceBalanceSettlementBill) {
+                        // No dedicated per-bill preview screen yet — the
+                        // global Settlement History pages cover this.
+                        return;
+                      } else if (item.historyType === 'LINE_STOCK') {
                         navigation.navigate('LineStockBillPreview', { transactionId: item._id });
+                      } else if (isLineStockSettlementBill) {
+                        navigation.navigate('LineStockSettlementBillPreview', { settlementId: item._id });
                       } else if (isSettlement) {
                         navigation.navigate('SettlementPreview', { settlement: item, originalBillNumber: item.originalBillNumber });
                       } else if (item.transactionType === 'LINE_STOCK_SETTLEMENT') {
@@ -469,23 +566,57 @@ export default function CustomerDetailScreen({ navigation, route }) {
                     }}
                   >
                     <View style={{flexDirection:'row', justifyContent:'space-between', marginBottom:6}}>
-                      <Text style={{fontWeight:'800', color:DARK_BROWN}}>#{isSettlement ? item.settlementBillNumber : item._id.slice(-6).toUpperCase()}</Text>
+                      <Text style={{fontWeight:'800', color:DARK_BROWN}}>
+                        #{isSettlement ? item.settlementBillNumber : isLineStockSettlementBill ? item.settlementNumber : (isOldBalanceSettlementBill || isAdvanceBalanceSettlementBill) ? item.billNumber : item._id.slice(-6).toUpperCase()}
+                      </Text>
                       <View style={{flexDirection: 'row', gap: 6}}>
-                        {!isSettlement && item.transactionSubtype && (
+                        {!isAnySettlementBill && item.transactionSubtype && (
                           <View style={[styles.typeBadge, {backgroundColor: '#E3F2FD'}]}>
                             <Text style={[styles.typeText, {color: '#1565C0'}]}>{item.transactionSubtype.replace('_', ' ')}</Text>
                           </View>
                         )}
-                        <View style={[styles.typeBadge, { backgroundColor: isSettlement ? '#E8F5E9' : (status === 'PAID' ? '#E8F5E9' : '#FFF3E0') }]}>
-                          <Text style={[styles.typeText, { color: isSettlement ? '#2E7D32' : (status === 'PAID' ? '#2E7D32' : '#E65100') }]}>
-                            {isSettlement ? 'SETTLEMENT' : status}
+                        <View style={[styles.typeBadge, { backgroundColor: isAnySettlementBill ? '#E8F5E9' : (status === 'PAID' ? '#E8F5E9' : '#FFF3E0') }]}>
+                          <Text style={[styles.typeText, { color: isAnySettlementBill ? '#2E7D32' : (status === 'PAID' ? '#2E7D32' : '#E65100') }]}>
+                            {isAnySettlementBill ? 'SETTLEMENT' : status}
                           </Text>
                         </View>
                       </View>
                     </View>
                     <Text style={{fontSize:12, color:'#666', marginBottom:6}}>{formatDate(item.createdAt)}</Text>
-                    
-                    {item.historyType === 'LINE_STOCK' ? (
+
+                    {isLineStockSettlementBill ? (
+                      <View style={{flexDirection:'row', justifyContent:'space-between', marginTop:4, borderTopWidth:1, borderColor:'#EEE', paddingTop:6}}>
+                        <View>
+                          <Text style={{fontSize:10, color:'#888'}}>Sold Items</Text>
+                          <Text style={{fontSize:12, fontWeight:'bold', color:'#333'}}>{item.soldItems?.length || 0}</Text>
+                        </View>
+                        <View>
+                          <Text style={{fontSize:10, color:'#888'}}>Returned Items</Text>
+                          <Text style={{fontSize:12, fontWeight:'bold', color:'#333'}}>{item.returnedItems?.length || 0}</Text>
+                        </View>
+                        <View style={{alignItems:'flex-end'}}>
+                          <Text style={{fontSize:10, color:'#888'}}>Final Balance</Text>
+                          <Text style={{fontSize:13, fontWeight:'bold', color: item.finalBalance > 0 ? '#D32F2F' : '#2E7D32'}}>{Number(item.finalBalance || 0).toFixed(3)}g</Text>
+                        </View>
+                      </View>
+                    ) : (isOldBalanceSettlementBill || isAdvanceBalanceSettlementBill) ? (
+                      <View style={{flexDirection:'row', justifyContent:'space-between', marginTop:4, borderTopWidth:1, borderColor:'#EEE', paddingTop:6}}>
+                        <View>
+                          <Text style={{fontSize:10, color:'#888'}}>Type</Text>
+                          <Text style={{fontSize:12, fontWeight:'bold', color:'#333'}}>{isOldBalanceSettlementBill ? 'Old Balance' : 'Advance Balance'}</Text>
+                        </View>
+                        <View>
+                          <Text style={{fontSize:10, color:'#888'}}>Settlement Gram</Text>
+                          <Text style={{fontSize:12, fontWeight:'bold', color:'#D32F2F'}}>{Number(item.totalSettlementGram || 0).toFixed(3)}g</Text>
+                        </View>
+                        <View style={{alignItems:'flex-end'}}>
+                          <Text style={{fontSize:10, color:'#888'}}>Final Balance</Text>
+                          <Text style={{fontSize:13, fontWeight:'bold', color: item.finalOldBalance > 0 ? '#D32F2F' : '#2E7D32'}}>
+                            {item.finalOldBalance > 0 ? `${Number(item.finalOldBalance).toFixed(3)}g (Old)` : `${Number(item.finalAdvanceBalance).toFixed(3)}g (Advance)`}
+                          </Text>
+                        </View>
+                      </View>
+                    ) : item.historyType === 'LINE_STOCK' ? (
                       <View style={{flexDirection:'row', justifyContent:'space-between', marginTop:4, borderTopWidth:1, borderColor:'#EEE', paddingTop:6}}>
                         <View>
                           <Text style={{fontSize:10, color:'#888'}}>Total Items</Text>
@@ -838,6 +969,15 @@ const styles = StyleSheet.create({
   errorText: { color: DARK_BROWN, fontSize: 18, fontWeight: '700', marginTop: 12 },
   backLink: { marginTop: 16 },
   backLinkText: { color: GOLD, fontWeight: '700', fontSize: 14 },
+
+  historyCategoryRow: { flexDirection: 'row', gap: 8, marginBottom: 14, flexWrap: 'wrap' },
+  historyCategoryChip: {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E8D8B8',
+  },
+  historyCategoryChipActive: { backgroundColor: GOLD, borderColor: GOLD },
+  historyCategoryText: { fontSize: 13, fontWeight: '600', color: DARK_BROWN },
+  historyCategoryTextActive: { color: DARK_BROWN, fontWeight: '700' },
 
   billActionRow: {
     flexDirection: 'row', gap: 8, marginTop: 10,

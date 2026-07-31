@@ -387,14 +387,49 @@ exports.getAllTransactions = async (req, res) => {
 
 exports.getRecentTransactions = async (req, res) => {
   try {
-    const transactions = await Transaction.find()
-      .populate('customerId', 'customerName phoneNumber customerType oldBalance advance')
+    // Over-fetch and filter rather than .limit(10) directly — a hidden
+    // ("Clear") record or a dangling customer reference must never eat one of
+    // the 10 slots the admin actually sees.
+    const candidates = await Transaction.find({ hiddenFromRecent: { $ne: true } })
+      .populate('customerId', 'customerName phoneNumber customerType customerCategory oldBalance advance')
       .sort({ createdAt: -1 })
-      .limit(10);
+      .limit(40);
+    const transactions = candidates.filter(t => t.customerId).slice(0, 10);
     res.json({ success: true, data: transactions });
   } catch (error) {
     console.error('getRecentTransactions Error:', error);
     res.status(500).json({ success: false, message: 'Server Error' });
+  }
+};
+
+// ─── Clear (hide) every transaction from the Recent Transactions feed ────────
+// Never deletes anything — Bill History, Reports, and Stock all query
+// Transaction without this flag, so they're completely unaffected.
+exports.clearAllRecentTransactions = async (req, res) => {
+  try {
+    await Transaction.updateMany({}, { $set: { hiddenFromRecent: true } });
+    res.json({ success: true, message: 'Recent Transactions cleared' });
+  } catch (error) {
+    console.error('clearAllRecentTransactions Error:', error);
+    res.status(500).json({ success: false, message: 'Server error clearing recent transactions' });
+  }
+};
+
+// ─── Clear (hide) a single transaction from the Recent Transactions feed ─────
+exports.clearRecentTransaction = async (req, res) => {
+  try {
+    const transaction = await Transaction.findByIdAndUpdate(
+      req.params.id,
+      { $set: { hiddenFromRecent: true } },
+      { new: true }
+    );
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+    res.json({ success: true, message: 'Transaction cleared from Recent Transactions' });
+  } catch (error) {
+    console.error('clearRecentTransaction Error:', error);
+    res.status(500).json({ success: false, message: 'Server error clearing transaction' });
   }
 };
 

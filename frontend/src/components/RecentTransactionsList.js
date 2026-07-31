@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, ActivityIndicator, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { transactionAPI } from '../services/api';
-import { resolveDisplayBalance } from '../utils/balanceDisplay';
+import { resolveDisplayBalance, formatBalanceForCustomer } from '../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -40,6 +40,32 @@ export default function RecentTransactionsList() {
     }
   };
 
+  const handleClearAll = () => {
+    Alert.alert(
+      'Clear Recent Transactions',
+      'Do you want to clear all Recent Transactions?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes', style: 'destructive',
+          onPress: async () => {
+            try {
+              await transactionAPI.clearAllRecent();
+              setTransactions([]);
+            } catch (e) {
+              Alert.alert('Error', 'Failed to clear recent transactions.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClearOne = (id) => {
+    transactionAPI.clearRecent(id).catch(() => {});
+    setTransactions(prev => prev.filter(t => t._id !== id));
+  };
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -52,9 +78,16 @@ export default function RecentTransactionsList() {
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.sectionTitle}>Recent Transactions</Text>
-        <TouchableOpacity onPress={() => navigation.navigate('TransactionManagement')}>
-          <Text style={styles.viewAll}>View All</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          {transactions.length > 0 && (
+            <TouchableOpacity onPress={handleClearAll} style={{ marginRight: 14 }}>
+              <Text style={styles.clearAll}>Clear All</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={() => navigation.navigate('TransactionManagement')}>
+            <Text style={styles.viewAll}>View All</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {transactions.length === 0 ? (
@@ -75,8 +108,16 @@ export default function RecentTransactionsList() {
             >
               <View style={styles.cardHeader}>
                 <Text style={styles.billNo}>{item.commonBillNo || `#${item._id.slice(-6).toUpperCase()}`}</Text>
-                <View style={styles.typeBadge}>
-                  <Text style={styles.typeText}>{getTransactionTypeLabel(item)}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={styles.typeBadge}>
+                    <Text style={styles.typeText}>{getTransactionTypeLabel(item)}</Text>
+                  </View>
+                  <TouchableOpacity
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    onPress={(e) => { e.stopPropagation(); handleClearOne(item._id); }}
+                  >
+                    <MaterialCommunityIcons name="close-circle-outline" size={18} color="#B0A48A" />
+                  </TouchableOpacity>
                 </View>
               </View>
               <Text style={styles.customerName}>{item.customerId?.customerName || 'Unknown Customer'}</Text>
@@ -92,14 +133,14 @@ export default function RecentTransactionsList() {
                   </View>
                   <View style={styles.row}>
                     <Text style={[styles.amt, { color: balanceLabel === 'Advance' ? '#2E7D32' : (balanceValue > 0 ? '#D32F2F' : DARK_BROWN) }]}>
-                      {balanceLabel}: ₹{balanceValue.toLocaleString('en-IN', {maximumFractionDigits:2})}
+                      {balanceLabel}: {formatBalanceForCustomer(balanceValue, item.customerId)}
                     </Text>
                   </View>
                 </>
               ) : (
                 <View style={styles.row}>
                   <Text style={[styles.amt, { color: balanceLabel === 'Advance' ? '#2E7D32' : (balanceValue > 0 ? '#D32F2F' : DARK_BROWN) }]}>
-                    {balanceLabel}: {balanceValue.toFixed(3)}g
+                    {balanceLabel}: {formatBalanceForCustomer(balanceValue, item.customerId)}
                   </Text>
                 </View>
               )}
@@ -114,12 +155,14 @@ export default function RecentTransactionsList() {
 const styles = StyleSheet.create({
   container: { paddingHorizontal: 16, marginTop: 16, marginBottom: 20 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: DARK_BROWN },
   viewAll: { fontSize: 13, color: GOLD, fontWeight: '600' },
+  clearAll: { fontSize: 13, color: '#D32F2F', fontWeight: '600' },
   empty: { textAlign: 'center', color: '#888', fontStyle: 'italic', marginTop: 10 },
-  
+
   card: { backgroundColor: '#FFF', padding: 12, borderRadius: 10, marginBottom: 8, elevation: 1 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   billNo: { fontWeight: 'bold', color: DARK_BROWN },
   typeBadge: { backgroundColor: 'rgba(212,175,55,0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   typeText: { fontSize: 10, color: DARK_BROWN, fontWeight: '700' },

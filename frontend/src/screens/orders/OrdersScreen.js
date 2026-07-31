@@ -137,12 +137,15 @@ export default function OrdersScreen({ navigation }) {
   const handleStatusChange = useCallback((order) => {
     Alert.alert('Update Status', `Current: ${order.status}`, [
       { text: 'Pending',   onPress: () => updateOrderStatus(order._id, 'Pending') },
-      { text: 'Ready',     onPress: () => updateOrderStatus(order._id, 'Ready') },
+      // Ready no longer updates status directly — it opens the Order Bill
+      // Preview, where a mandatory Bill Type (Plus/Wastage) is chosen and
+      // Save Bill is what actually transitions the order to Ready.
+      { text: 'Ready',     onPress: () => navigation.navigate('OrderBillPreview', { orderId: order._id }) },
       { text: 'Delivered', onPress: () => updateOrderStatus(order._id, 'Delivered') },
       { text: 'Cancelled', onPress: () => updateOrderStatus(order._id, 'Cancelled'), style: 'destructive' },
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [updateOrderStatus]);
+  }, [updateOrderStatus, navigation]);
 
   const handleDelete = useCallback((order) => {
     Alert.alert(

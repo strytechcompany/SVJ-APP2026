@@ -12,11 +12,15 @@ const {
   deleteTransaction,
   getNextBillNumber,
   getUpcomingReminders,
+  clearAllRecentTransactions,
+  clearRecentTransaction,
 } = require('../controllers/transactionController');
 
 router.post('/create', protect, createTransaction);
 router.get('/all', protect, getAllTransactions);
 router.get('/recent', protect, getRecentTransactions);
+router.patch('/recent/clear-all', protect, clearAllRecentTransactions);
+router.patch('/recent/:id/clear', protect, clearRecentTransaction);
 router.get('/next-bill-number', protect, getNextBillNumber);
 router.get('/reminders/upcoming', protect, getUpcomingReminders);
 router.get('/customer/:customerId', protect, getTransactionsByCustomer);

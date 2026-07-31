@@ -65,6 +65,18 @@ import CustomerSearchScreen from '../screens/orders/CustomerSearchScreen';
 import CreateOrderScreen from '../screens/orders/CreateOrderScreen';
 import OrderBillPreviewScreen from '../screens/orders/OrderBillPreviewScreen';
 
+// Balance Summary module (Old Balance / Advance Balance)
+import OldBalanceCustomerList from '../screens/balance/OldBalanceCustomerList';
+import OldBalanceHistory from '../screens/balance/OldBalanceHistory';
+import OldBalanceSettlement from '../screens/balance/OldBalanceSettlement';
+import OldBalanceSettlementPreview from '../screens/balance/OldBalanceSettlementPreview';
+import OldBalanceSettlementHistory from '../screens/balance/OldBalanceSettlementHistory';
+import AdvanceBalanceCustomerList from '../screens/balance/AdvanceBalanceCustomerList';
+import AdvanceBalanceHistory from '../screens/balance/AdvanceBalanceHistory';
+import AdvanceBalanceSettlement from '../screens/balance/AdvanceBalanceSettlement';
+import AdvanceBalanceSettlementPreview from '../screens/balance/AdvanceBalanceSettlementPreview';
+import AdvanceBalanceSettlementHistory from '../screens/balance/AdvanceBalanceSettlementHistory';
+
 // Custom bottom bar
 import BottomTabBar from '../components/BottomTabBar';
 
@@ -126,6 +138,18 @@ export default function AppNavigator() {
             <Stack.Screen name="LineStockBillPreview" component={LineStockBillPreviewScreen} />
             <Stack.Screen name="LineStockSettlement" component={LineStockSettlementScreen} />
             <Stack.Screen name="LineStockSettlementBillPreview" component={LineStockSettlementBillPreviewScreen} />
+
+            {/* ─── Balance Summary Module ─── */}
+            <Stack.Screen name="OldBalanceCustomerList" component={OldBalanceCustomerList} />
+            <Stack.Screen name="OldBalanceHistory" component={OldBalanceHistory} />
+            <Stack.Screen name="OldBalanceSettlement" component={OldBalanceSettlement} />
+            <Stack.Screen name="OldBalanceSettlementPreview" component={OldBalanceSettlementPreview} />
+            <Stack.Screen name="OldBalanceSettlementHistory" component={OldBalanceSettlementHistory} />
+            <Stack.Screen name="AdvanceBalanceCustomerList" component={AdvanceBalanceCustomerList} />
+            <Stack.Screen name="AdvanceBalanceHistory" component={AdvanceBalanceHistory} />
+            <Stack.Screen name="AdvanceBalanceSettlement" component={AdvanceBalanceSettlement} />
+            <Stack.Screen name="AdvanceBalanceSettlementPreview" component={AdvanceBalanceSettlementPreview} />
+            <Stack.Screen name="AdvanceBalanceSettlementHistory" component={AdvanceBalanceSettlementHistory} />
 
             {/* ─── Other Modules ─── */}
             <Stack.Screen name="ChitFund" component={ChitFundScreen} />

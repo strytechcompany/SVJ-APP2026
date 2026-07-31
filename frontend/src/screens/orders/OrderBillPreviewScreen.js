@@ -9,11 +9,34 @@ import { orderAPI } from '../../services/api';
 import { useOrders } from '../../context/OrderContext';
 import { OrderPrintService } from '../../services/PrintService';
 import { useAuth } from '../../context/AuthContext';
+import { safeNumber } from '../../utils/safeNumber';
+import { resolveDisplayBalance } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
 const BG = '#F8F4E8';
 const HEADER_BG = '#3D2200';
+
+// Mirrors backend/utils/wastageCashBalance.js exactly — the ONE cash-
+// conversion formula for the Wastage Bill's balance section, used here for
+// a live preview before Save Bill recomputes and persists it server-side.
+// This is a derived cash VIEW only — it never touches the order's real
+// gram-based balance (oldBalanceBefore/After, advanceBalanceBefore/After),
+// which stays the single source of truth everywhere else.
+function computeWastageCashBalance(previousOldGram, previousAdvanceGram, balanceRate, itemCash) {
+  const isAdvanceCase = previousAdvanceGram > 0 && previousOldGram === 0;
+  const previousGram = isAdvanceCase ? previousAdvanceGram : previousOldGram;
+  const previousCash = safeNumber(previousGram * balanceRate);
+  const net = safeNumber(itemCash - previousCash);
+  if (isAdvanceCase) {
+    return net >= 0
+      ? { previousGram, previousCash, oldCash: 0, advanceCash: net }
+      : { previousGram, previousCash, oldCash: safeNumber(Math.abs(net)), advanceCash: 0 };
+  }
+  return net >= 0
+    ? { previousGram, previousCash, oldCash: net, advanceCash: 0 }
+    : { previousGram, previousCash, oldCash: 0, advanceCash: safeNumber(Math.abs(net)) };
+}
 
 const STATUS_COLORS = {
   Pending:   { bg: '#FFF8E1', border: '#F9A825', text: '#F57F17' },
@@ -55,18 +78,42 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
   const [saved, setSaved] = useState(false);
   const [printing, setPrinting] = useState(false);
 
-  // Bill Style (Plus/Wastage print layout) — purely presentational, saved
-  // alongside the order so reopening the bill remembers the choice.
+  // Bill Type (Plus/Wastage) — mandatory before Save Bill. Selecting it here
+  // is what actually generates the corresponding bill structure below.
   const [billStyle, setBillStyle] = useState(null);
-  const [editingBill, setEditingBill] = useState(false);
   const [notesInput, setNotesInput] = useState('');
-  const [savingBillStyle, setSavingBillStyle] = useState(false);
+  const [savingBill, setSavingBill] = useState(false);
+
+  // PLUS Bill items — Item Name/Weight/Rate/Cash, all independently editable.
+  const [plusItems, setPlusItems] = useState([]);
+  // WASTAGE Bill items — Item Name/Weight/Wastage%/Rate editable; Cash always
+  // recomputes as Weight × Rate.
+  const [wastageItems, setWastageItems] = useState([]);
+  // Admin-entered ₹ per gram used to convert the order's real gram-based
+  // Previous Balance into cash for this Wastage Bill only.
+  const [wBalanceRate, setWBalanceRate] = useState('');
+
+  const seedBillItems = (ord) => {
+    if (ord.plusBill?.items?.length) {
+      setPlusItems(ord.plusBill.items.map(i => ({ itemName: i.itemName || '', weight: String(i.weight ?? ''), rate: String(i.rate ?? ''), cash: String(i.cash ?? '') })));
+    } else {
+      setPlusItems((ord.orderItems || []).map(i => ({ itemName: i.itemName || '', weight: String(i.itemWeight ?? ''), rate: '', cash: '' })));
+    }
+    if (ord.wastageBill?.items?.length) {
+      setWastageItems(ord.wastageBill.items.map(i => ({ itemName: i.itemName || '', weight: String(i.weight ?? ''), wastage: String(i.wastage ?? ''), rate: String(i.rate ?? '') })));
+      setWBalanceRate(String(ord.wastageBill.balanceRate ?? ''));
+    } else {
+      setWastageItems((ord.orderItems || []).map(i => ({ itemName: i.itemName || '', weight: String(i.itemWeight ?? ''), wastage: '', rate: '' })));
+      setWBalanceRate('');
+    }
+  };
 
   useEffect(() => {
     if (isPreviewMode) {
       setOrder(previewPayload);
       setBillStyle(previewPayload.billStyle || null);
       setNotesInput(previewPayload.notes || '');
+      seedBillItems(previewPayload);
       setLoading(false);
       return;
     }
@@ -82,6 +129,7 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
           setOrder(res.data.data);
           setBillStyle(res.data.data.billStyle || null);
           setNotesInput(res.data.data.notes || '');
+          seedBillItems(res.data.data);
         } else {
           Alert.alert('Error', 'Failed to load order.');
         }
@@ -93,6 +141,25 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
     };
     fetchOrder();
   }, [orderId]);
+
+  const updatePlusItem = (idx, field, value) => {
+    setPlusItems(items => items.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
+  };
+  const updateWastageItem = (idx, field, value) => {
+    setWastageItems(items => items.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
+  };
+
+  const wastageComputed = wastageItems.map(it => {
+    const weight = parseFloat(it.weight) || 0;
+    const rate = parseFloat(it.rate) || 0;
+    return { ...it, cash: safeNumber(weight * rate) };
+  });
+  const wastageTotalWeight = safeNumber(wastageComputed.reduce((s, i) => s + (parseFloat(i.weight) || 0), 0));
+  const wastageTotalCash = safeNumber(wastageComputed.reduce((s, i) => s + i.cash, 0));
+
+  const plusComputed = plusItems.map(it => ({ ...it, cash: safeNumber(parseFloat(it.cash) || 0) }));
+  const plusTotalWeight = safeNumber(plusComputed.reduce((s, i) => s + (parseFloat(i.weight) || 0), 0));
+  const plusTotalCash = safeNumber(plusComputed.reduce((s, i) => s + i.cash, 0));
 
   const handleSave = async () => {
     if (!order) return;
@@ -119,21 +186,67 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
     }
   };
 
-  const handleSaveBillStyle = async () => {
-    setSavingBillStyle(true);
+  // The real "Save Bill" — mandatory Bill Type, saves the Plus/Wastage item
+  // table to MongoDB, and transitions Pending -> Ready exactly once.
+  const handleSaveBill = async () => {
+    if (!billStyle) {
+      Alert.alert('Bill Type Required', 'Please select Plus Bill or Wastage Bill.');
+      return;
+    }
+    setSavingBill(true);
     try {
-      const res = await orderAPI.updateBillStyle(order._id, { billStyle, notes: notesInput });
+      const items = billStyle === 'PLUS'
+        ? plusComputed.map(({ itemName, weight, rate, cash }) => ({ itemName, weight: parseFloat(weight) || 0, rate: parseFloat(rate) || 0, cash }))
+        : wastageComputed.map(({ itemName, weight, wastage, rate, cash }) => ({ itemName, weight: parseFloat(weight) || 0, wastage: parseFloat(wastage) || 0, rate: parseFloat(rate) || 0, cash }));
+      const payload = { billStyle, notes: notesInput, items };
+      // Server recomputes the cash conversion itself from the order's real
+      // gram-based previous balance — only the Balance Rate travels here.
+      if (billStyle === 'WASTAGE') payload.balanceRate = parseFloat(wBalanceRate) || 0;
+      const res = await orderAPI.saveBill(order._id, payload);
       if (res.data.success) {
         setOrder(res.data.data);
-        setEditingBill(false);
+        seedBillItems(res.data.data);
         await onRefresh();
-        Alert.alert('Success', 'Bill Saved Successfully');
+        Alert.alert('Success', 'Bill Saved Successfully', [
+          { text: 'OK', onPress: () => navigation.navigate('Orders') },
+        ]);
       }
     } catch (e) {
       Alert.alert('Error', e.response?.data?.message || 'Failed to save bill.');
     } finally {
-      setSavingBillStyle(false);
+      setSavingBill(false);
     }
+  };
+
+  // Print must NEVER read the original/last-fetched `order` object for the
+  // bill-type-specific section — it always reflects the CURRENT on-screen
+  // Bill Preview state (plusComputed/wastageComputed/notesInput), including
+  // any unsaved edits, exactly like buildPrintSettlement does for Line Stock.
+  const buildPrintOrder = () => {
+    const base = isPreviewMode
+      ? { ...order, customer: order.customer || order.customerId }
+      : { ...order, customer: order.customerId };
+    const liveItems = billStyle === 'PLUS'
+      ? plusComputed.map(({ itemName, weight, rate, cash }) => ({ itemName, weight: parseFloat(weight) || 0, rate: parseFloat(rate) || 0, cash }))
+      : billStyle === 'WASTAGE'
+      ? wastageComputed.map(({ itemName, weight, wastage, rate, cash }) => ({ itemName, weight: parseFloat(weight) || 0, wastage: parseFloat(wastage) || 0, rate: parseFloat(rate) || 0, cash }))
+      : [];
+    return {
+      ...base,
+      billStyle,
+      notes: notesInput,
+      ...(billStyle === 'PLUS' && { plusBill: { items: liveItems } }),
+      ...(billStyle === 'WASTAGE' && {
+        wastageBill: {
+          items: liveItems,
+          balanceRate: wBalanceRateVal,
+          previousBalanceGram: wCashBalance.previousGram,
+          previousBalanceCash: wCashBalance.previousCash,
+          currentOldBalanceCash: wCashBalance.oldCash,
+          currentAdvanceBalanceCash: wCashBalance.advanceCash,
+        },
+      }),
+    };
   };
 
   const handlePrint = async () => {
@@ -141,9 +254,7 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
     printLockRef.current = true;
     setPrinting(true);
     try {
-      const orderData = isPreviewMode
-        ? { ...order, customer: order.customer || order.customerId, billStyle }
-        : { ...order, customer: order.customerId, billStyle };
+      const orderData = buildPrintOrder();
       await OrderPrintService.printThermal(orderData);
     } catch (e) {
       if (!e?.message?.toLowerCase().includes('cancel')) {
@@ -183,6 +294,26 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
   const notes = order.notes || '';
   const goldRate = order.goldRate || order.activeGoldRate || 0;
 
+  // Wastage Bill balance cash-conversion. Once a Wastage Bill has been saved,
+  // its balance section is loaded EXACTLY from MongoDB (order.wastageBill) —
+  // never recalculated on screen, even while the admin is mid-edit toward a
+  // future re-save. Only a brand-new, never-saved Wastage Bill computes it
+  // live, purely so there's something to preview before the very first Save
+  // Bill. This guarantees Bill Preview, Print, PDF, WhatsApp, and MongoDB can
+  // never drift apart after a reload.
+  const wBalanceRateVal = safeNumber(parseFloat(wBalanceRate) || 0);
+  const savedWastageBill = (order.billStyle === 'WASTAGE' && order.wastageBill) ? order.wastageBill : null;
+  const wCashBalance = savedWastageBill
+    ? {
+        previousGram: safeNumber(savedWastageBill.previousBalanceGram),
+        previousCash: safeNumber(savedWastageBill.previousBalanceCash),
+        oldCash: safeNumber(savedWastageBill.currentOldBalanceCash),
+        advanceCash: safeNumber(savedWastageBill.currentAdvanceBalanceCash),
+      }
+    : computeWastageCashBalance(oldBalanceBefore, advanceBalanceBefore, wBalanceRateVal, wastageTotalCash);
+  const wPrevResolved = resolveDisplayBalance(oldBalanceBefore, advanceBalanceBefore);
+  const wFinalResolved = resolveDisplayBalance(wCashBalance.oldCash, wCashBalance.advanceCash);
+
   const statusStyle = STATUS_COLORS[status] || STATUS_COLORS.Pending;
 
   return (
@@ -221,7 +352,7 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
           ) : null}
           <Divider />
 
-          {/* Order Items */}
+          {/* Order Items — unchanged, existing structure */}
           <Text style={styles.sectionLabel}>ORDER ITEMS</Text>
           {orderItems.map((item, idx) => (
             <View key={idx} style={styles.orderItemBlock}>
@@ -265,27 +396,92 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
           <BillRow label="Advance Given:" value={`+${fmt3(advanceTotalGram)}g`} valueColor="#2E7D32" />
           <BillRow label="New Advance Balance:" value={`${fmt3(advanceBalanceAfter)}g`} bold valueColor="#2E7D32" />
 
-          {editingBill ? (
+          {/* Bill Type specific structure — Plus or Wastage */}
+          {billStyle === 'PLUS' && (
             <>
               <Divider />
-              <Text style={styles.sectionLabel}>NOTES</Text>
-              <TextInput
-                style={styles.notesEditInput}
-                multiline
-                value={notesInput}
-                onChangeText={setNotesInput}
-                placeholder="Add notes for this bill..."
-              />
+              <Text style={styles.sectionLabel}>PLUS BILL — ISSUED PRODUCTS</Text>
+              <View style={styles.tableHeaderRow}>
+                <Text style={[styles.th, { flex: 2 }]}>Item Name</Text>
+                <Text style={[styles.th, { flex: 1 }]}>Wt(g)</Text>
+                <Text style={[styles.th, { flex: 1 }]}>Rate(₹)</Text>
+                <Text style={[styles.th, { flex: 1.2, textAlign: 'right' }]}>Cash(₹)</Text>
+              </View>
+              {plusComputed.map((item, idx) => (
+                <View key={idx} style={styles.tableDataRow}>
+                  <TextInput style={[styles.tdInput, { flex: 2 }]} value={item.itemName} onChangeText={(v) => updatePlusItem(idx, 'itemName', v)} placeholder="Item Name" />
+                  <TextInput style={[styles.tdInput, { flex: 1 }]} keyboardType="numeric" value={item.weight} onChangeText={(v) => updatePlusItem(idx, 'weight', v)} placeholder="0" />
+                  <TextInput style={[styles.tdInput, { flex: 1 }]} keyboardType="numeric" value={item.rate} onChangeText={(v) => updatePlusItem(idx, 'rate', v)} placeholder="0" />
+                  <TextInput style={[styles.tdInput, { flex: 1.2, textAlign: 'right' }]} keyboardType="numeric" value={item.cash != null ? String(item.cash) : ''} onChangeText={(v) => updatePlusItem(idx, 'cash', v)} placeholder="0" />
+                </View>
+              ))}
+              <View style={styles.row}><Text style={styles.boldText}>Total Weight:</Text><Text style={styles.boldText}>{plusTotalWeight.toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.boldText}>Total Cash:</Text><Text style={styles.boldText}>₹{fmtMoney(plusTotalCash)}</Text></View>
             </>
-          ) : notes ? (
+          )}
+
+          {billStyle === 'WASTAGE' && (
             <>
               <Divider />
-              <Text style={styles.notesText}>Note: {notes}</Text>
+              <Text style={styles.sectionLabel}>WASTAGE BILL — ISSUED PRODUCTS</Text>
+              <View style={styles.tableHeaderRow}>
+                <Text style={[styles.th, { flex: 1.8 }]}>Item Name</Text>
+                <Text style={[styles.th, { flex: 0.9 }]}>Wt(g)</Text>
+                <Text style={[styles.th, { flex: 0.9 }]}>Wst(%)</Text>
+                <Text style={[styles.th, { flex: 0.9 }]}>Rate(₹)</Text>
+                <Text style={[styles.th, { flex: 1.2, textAlign: 'right' }]}>Cash(₹)</Text>
+              </View>
+              {wastageComputed.map((item, idx) => (
+                <View key={idx} style={styles.tableDataRow}>
+                  <TextInput style={[styles.tdInput, { flex: 1.8 }]} value={item.itemName} onChangeText={(v) => updateWastageItem(idx, 'itemName', v)} placeholder="Item Name" />
+                  <TextInput style={[styles.tdInput, { flex: 0.9 }]} keyboardType="numeric" value={item.weight} onChangeText={(v) => updateWastageItem(idx, 'weight', v)} placeholder="0" />
+                  <TextInput style={[styles.tdInput, { flex: 0.9 }]} keyboardType="numeric" value={item.wastage} onChangeText={(v) => updateWastageItem(idx, 'wastage', v)} placeholder="0" />
+                  <TextInput style={[styles.tdInput, { flex: 0.9 }]} keyboardType="numeric" value={item.rate} onChangeText={(v) => updateWastageItem(idx, 'rate', v)} placeholder="0" />
+                  <Text style={[styles.td, { flex: 1.2, textAlign: 'right' }]}>{item.cash.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</Text>
+                </View>
+              ))}
+              <View style={styles.row}><Text style={styles.boldText}>Total Weight:</Text><Text style={styles.boldText}>{wastageTotalWeight.toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.boldText}>Total Cash:</Text><Text style={styles.boldText}>₹{fmtMoney(wastageTotalCash)}</Text></View>
+
+              {/* Old Balance / Advance Balance conversion — Wastage Bill
+                  only. The order's real gram balance never changes; Balance
+                  Rate converts it to cash for this bill's own summary. */}
+              <Divider />
+              <View style={styles.row}>
+                <Text style={styles.boldText}>{wPrevResolved.label === 'Current Balance' ? 'Previous Balance (g):' : `Previous ${wPrevResolved.label} (g):`}</Text>
+                <Text style={styles.boldText}>{wPrevResolved.value.toFixed(3)}g</Text>
+              </View>
+              <View style={[styles.row, { alignItems: 'center' }]}>
+                <Text style={styles.boldText}>Balance Rate (₹/g)</Text>
+                <TextInput style={[styles.tdInput, { flex: 1, marginLeft: 8, textAlign: 'right' }]} keyboardType="numeric" value={wBalanceRate} onChangeText={setWBalanceRate} placeholder="0" />
+              </View>
+              <View style={styles.row}><Text style={styles.boldText}>Previous Balance Cash:</Text><Text style={styles.boldText}>₹{fmtMoney(wCashBalance.previousCash)}</Text></View>
+
+              <Divider />
+              <Text style={styles.sectionLabel}>SUMMARY (WASTAGE)</Text>
+              <View style={styles.row}><Text style={styles.boldText}>Total Weight:</Text><Text style={styles.boldText}>{wastageTotalWeight.toFixed(3)}g</Text></View>
+              <View style={styles.row}><Text style={styles.boldText}>Total Cash:</Text><Text style={styles.boldText}>₹{fmtMoney(wastageTotalCash)}</Text></View>
+              <View style={styles.row}><Text style={styles.boldText}>Previous Balance Cash:</Text><Text style={styles.boldText}>₹{fmtMoney(wCashBalance.previousCash)}</Text></View>
+              {/* Current Old Balance OR Current Advance Balance — never both. */}
+              <View style={styles.row}>
+                <Text style={styles.boldText}>{wFinalResolved.label === 'Advance' ? 'Current Advance Balance:' : wFinalResolved.label === 'Old Balance' ? 'Current Old Balance:' : 'Current Balance:'}</Text>
+                <Text style={[styles.boldText, { color: wFinalResolved.label === 'Old Balance' ? '#D32F2F' : (wFinalResolved.label === 'Advance' ? '#2E7D32' : DARK_BROWN) }]}>₹{fmtMoney(wFinalResolved.value)}</Text>
+              </View>
             </>
-          ) : null}
+          )}
+
+          <Divider />
+          <Text style={styles.sectionLabel}>NOTES</Text>
+          <TextInput
+            style={styles.notesEditInput}
+            multiline
+            value={notesInput}
+            onChangeText={setNotesInput}
+            placeholder="Add notes for this bill..."
+          />
         </View>
 
-        {/* Bill Style — Plus/Wastage print layout choice */}
+        {/* Bill Type — mandatory before Save Bill */}
         <View style={styles.actionRow}>
           <TouchableOpacity
             style={[styles.billStyleBtn, { backgroundColor: billStyle === 'PLUS' ? GOLD : '#F0E4CC' }]}
@@ -305,12 +501,8 @@ export default function OrderBillPreviewScreen({ navigation, route }) {
 
         {billStyle && !isPreviewMode && (
           <View style={styles.actionRow}>
-            <TouchableOpacity style={[styles.printBtn, { backgroundColor: '#8A6B3C' }]} onPress={() => setEditingBill(v => !v)}>
-              <MaterialCommunityIcons name="pencil-outline" size={18} color="#FFF" style={{ marginRight: 6 }} />
-              <Text style={[styles.printBtnText, { color: '#FFF' }]}>{editingBill ? 'Cancel Edit' : 'Edit Bill'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveBillStyle} disabled={savingBillStyle}>
-              {savingBillStyle ? (
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveBill} disabled={savingBill}>
+              {savingBill ? (
                 <ActivityIndicator size="small" color="#FFF" />
               ) : (
                 <>
@@ -408,6 +600,13 @@ const styles = StyleSheet.create({
   notesEditInput: { backgroundColor: '#FDFAF4', borderRadius: 8, borderWidth: 1, borderColor: '#E8D8B8', padding: 10, fontSize: 13, color: '#2E1A00', minHeight: 60, textAlignVertical: 'top' },
   billStyleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 12 },
   billStyleBtnText: { fontSize: 14, fontWeight: '700', color: DARK_BROWN },
+
+  row: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+  tableHeaderRow: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#E0E0E0', paddingBottom: 4, marginBottom: 4 },
+  th: { fontSize: 10, fontWeight: '800', color: '#666' },
+  tableDataRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4, gap: 4 },
+  td: { fontSize: 12, color: '#2E1A00' },
+  tdInput: { fontSize: 11, color: '#2E1A00', borderWidth: 1, borderColor: '#E8D8B8', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 3 },
 
   actionRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
   saveBtn: {

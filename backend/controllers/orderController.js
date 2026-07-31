@@ -1,6 +1,7 @@
 const Order = require('../models/Order');
 const Customer = require('../models/Customer');
 const GoldRate = require('../models/GoldRate');
+const { computeWastageCashBalance } = require('../utils/wastageCashBalance');
 
 // ─── Create Order ──────────────────────────────────────────────────────────────
 exports.createOrder = async (req, res) => {
@@ -224,6 +225,75 @@ exports.updateBillStyle = async (req, res) => {
   } catch (error) {
     console.error('updateBillStyle error:', error.message);
     res.status(500).json({ success: false, message: 'Server error updating bill style.' });
+  }
+};
+
+// ─── Save the Order Bill (Plus or Wastage) ────────────────────────────────────
+// Reached from Orders → Status → Ready → Order Bill Preview → Save Bill. Bill
+// Type is mandatory. Cash is always recomputed server-side (never trusted
+// from the client): PLUS -> Weight × Rate, WASTAGE -> Weight × Rate (Wastage%
+// is stored for reference only, it does not affect Cash). Never touches
+// orderItems, payment, or balance fields — those already have their own real
+// effect on the customer's balance from createOrder. Transitions the order
+// from Pending to Ready exactly once; re-saving an already Ready/Delivered/
+// Cancelled order's bill (e.g. to fix a typo) never reverts its status.
+exports.saveBill = async (req, res) => {
+  try {
+    const { billStyle, notes, items, balanceRate } = req.body;
+    if (!['PLUS', 'WASTAGE'].includes(billStyle)) {
+      return res.status(400).json({ success: false, message: 'Bill Type (Plus or Wastage) is required.' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'At least one item is required.' });
+    }
+
+    const order = await Order.findById(req.params.id);
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    const sanitizedItems = items.map((it) => {
+      const weight = parseFloat(it.weight) || 0;
+      const rate = parseFloat(it.rate) || 0;
+      const cash = parseFloat((weight * rate).toFixed(2));
+      return billStyle === 'WASTAGE'
+        ? { itemName: it.itemName || '', weight, wastage: parseFloat(it.wastage) || 0, rate, cash }
+        : { itemName: it.itemName || '', weight, rate, cash };
+    });
+
+    order.billStyle = billStyle;
+    if (billStyle === 'PLUS') {
+      order.plusBill = { items: sanitizedItems };
+    } else {
+      // Wastage Bill balance cash-conversion — a derived cash VIEW built from
+      // the order's real gram balance; never touches oldBalanceBefore/After
+      // or advanceBalanceBefore/After themselves.
+      const itemCash = parseFloat(sanitizedItems.reduce((s, i) => s + i.cash, 0).toFixed(2));
+      const rate = parseFloat(balanceRate) || 0;
+      const previousOldGram = order.oldBalanceBefore || 0;
+      const previousAdvanceGram = order.advanceBalanceBefore || 0;
+      const { previousGram, previousCash, oldCash, advanceCash } = computeWastageCashBalance(
+        previousOldGram, previousAdvanceGram, rate, itemCash
+      );
+      order.wastageBill = {
+        items: sanitizedItems,
+        balanceRate: rate,
+        previousBalanceGram: previousGram,
+        previousBalanceCash: previousCash,
+        currentOldBalanceCash: oldCash,
+        currentAdvanceBalanceCash: advanceCash,
+      };
+    }
+    if (notes !== undefined) order.notes = notes;
+    if (order.status === 'Pending') order.status = 'Ready';
+
+    await order.save();
+    await order.populate('customerId', 'customerName phoneNumber customerType shopName advance oldBalance');
+
+    res.json({ success: true, data: order });
+  } catch (error) {
+    console.error('saveBill error:', error.message);
+    res.status(500).json({ success: false, message: 'Server error saving bill.' });
   }
 };
 

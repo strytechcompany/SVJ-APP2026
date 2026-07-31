@@ -7,7 +7,7 @@ import {
   Alert,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { resolveDisplayBalance } from '../../utils/balanceDisplay';
+import { resolveDisplayBalance, formatBalanceForCustomer } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -81,7 +81,7 @@ export default function CustomerCard({ customer, onView, onEdit, onDelete }) {
         <View style={styles.balanceItem}>
           <Text style={styles.balanceLabel}>{balanceLabel}</Text>
           <Text style={[styles.balanceValue, balanceLabel === 'Advance' && { color: '#2E7D32' }]}>
-            ₹ {balanceValue.toFixed(2)}
+            {formatBalanceForCustomer(balanceValue, customer)}
           </Text>
         </View>
         <View style={styles.balanceDivider} />

@@ -21,3 +21,22 @@ export function resolveDisplayBalance(oldBalance, advance) {
   }
   return { label: 'Current Balance', value: 0 };
 }
+
+// The stored unit for a customer's oldBalance/advance fields. Every customer
+// type stores these in grams EXCEPT a B2C customer in the WASTAGE category,
+// who stores them in cash (₹) — the same distinction already used to branch
+// Wastage vs Plus/B2D/Line-Stocker calculations throughout the app (see
+// TransactionCalculationScreen.js's isWastage, TransactionCustomerCard.js's
+// customerCategory check). Never guessed, never converted — just read.
+export function isCashBalanceCustomer(customer) {
+  return customer?.customerType === 'B2C' && customer?.customerCategory === 'WASTAGE';
+}
+
+// Formats a raw balance number in whichever unit it's actually stored in for
+// this customer — grams ("3.060g") or cash ("₹23,670.00"). Never mixes them.
+export function formatBalanceForCustomer(value, customer) {
+  const v = Number(value) || 0;
+  return isCashBalanceCustomer(customer)
+    ? `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `${v.toFixed(3)}g`;
+}

@@ -1,5 +1,42 @@
 const mongoose = require('mongoose');
 
+// PLUS Bill structure — a self-contained bill view built on top of the
+// order's own orderItems. Purely additive: never touches orderItems,
+// payment, or balance fields.
+const PlusBillItemSchema = new mongoose.Schema({
+  itemName: String,
+  weight: Number,
+  rate: Number,
+  cash: Number,
+}, { _id: false });
+const PlusBillSchema = new mongoose.Schema({
+  items: [PlusBillItemSchema],
+}, { _id: false });
+
+// WASTAGE Bill structure — Cash = Weight × Rate (Wastage % is stored/shown
+// for reference only, it does not factor into the Cash calculation). Same
+// additive guarantee as PlusBillSchema.
+const WastageBillItemSchema = new mongoose.Schema({
+  itemName: String,
+  weight: Number,
+  wastage: Number,
+  rate: Number,
+  cash: Number,
+}, { _id: false });
+const WastageBillSchema = new mongoose.Schema({
+  items: [WastageBillItemSchema],
+  // Cash-conversion fields (Wastage Bill only) — the ONE calculation for this
+  // bill's balance section. The order's real gram-based balance
+  // (oldBalanceBefore/After, advanceBalanceBefore/After at the top level)
+  // stays untouched; these are purely a derived cash VIEW for the Wastage
+  // Bill's own preview/print.
+  balanceRate: { type: Number, default: 0 },
+  previousBalanceGram: { type: Number, default: 0 },
+  previousBalanceCash: { type: Number, default: 0 },
+  currentOldBalanceCash: { type: Number, default: 0 },
+  currentAdvanceBalanceCash: { type: Number, default: 0 },
+}, { _id: false });
+
 const OrderItemSchema = new mongoose.Schema(
   {
     itemName: { type: String, required: true, trim: true },
@@ -62,6 +99,8 @@ const OrderSchema = new mongoose.Schema(
       enum: ['PLUS', 'WASTAGE', null],
       default: null,
     },
+    plusBill: PlusBillSchema,
+    wastageBill: WastageBillSchema,
 
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     createdByName: { type: String, default: '' },

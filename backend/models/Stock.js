@@ -4,13 +4,11 @@ const StockSchema = new mongoose.Schema(
   {
     itemNumber: {
       type: String,
-      unique: true,
       trim: true,
       required: [true, 'Item Number is required'],
     },
     barcode: {
       type: String,
-      unique: true,
       trim: true,
     },
     designName: {
@@ -93,5 +91,12 @@ StockSchema.pre('save', async function (next) {
   }
   next();
 });
+
+// Uniqueness is scoped to Active Stock only (isAvailable: true) — once an item
+// is fully sold (quantity reaches 0, isAvailable becomes false) it no longer
+// holds its Item Number/Barcode hostage, so the same Item Number can be
+// re-uploaded as a brand new stock record without a false "already exists".
+StockSchema.index({ itemNumber: 1 }, { unique: true, partialFilterExpression: { isAvailable: true } });
+StockSchema.index({ barcode: 1 }, { unique: true, partialFilterExpression: { isAvailable: true } });
 
 module.exports = mongoose.model('Stock', StockSchema);

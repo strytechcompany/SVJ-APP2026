@@ -16,6 +16,8 @@ router.delete('/settlement/draft/:lineStockTransactionId/sold-item/:stockId', se
 router.put('/settlement/:id/bill-style', settlementController.updateBillStyle);
 router.put('/settlement/:id/plus-bill', settlementController.savePlusBill);
 router.put('/settlement/:id/wastage-bill', settlementController.saveWastageBill);
+router.get('/settlement/customer/:customerId', settlementController.getSettlementsByCustomer);
+router.get('/settlement/by-transaction/:lineStockTransactionId', settlementController.getSettlementByTransactionId);
 router.get('/settlement/:id', settlementController.getSettlementById);
 router.delete('/clear-all', lineStockController.clearAllTransactions);
 router.put('/:id/bill-style', lineStockController.updateBillStyle);

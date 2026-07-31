@@ -90,7 +90,7 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
 
           if (txn.wastageBill) {
             setWIssuedItems((txn.wastageBill.issuedItems || []).map(i => ({
-              itemName: i.itemName, weight: i.weight, wastage: String(i.wastage ?? ''), rate: String(i.rate ?? ''),
+              itemName: i.itemName || 'Item', weight: i.weight, wastage: String(i.wastage ?? ''), rate: String(i.rate ?? ''),
             })));
             setWReceivedItems((txn.wastageBill.receivedItems || []).map((r, idx) => ({
               id: String(idx), receiptType: r.receiptType, weight: String(r.weight ?? ''), rate: String(r.rate ?? ''),
@@ -103,8 +103,15 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
             setWReminderDate(txn.wastageBill.reminderDate ? new Date(txn.wastageBill.reminderDate) : null);
             setEditingBill(false);
           } else {
-            setWIssuedItems((txn.issuedProducts || []).map(i => ({ itemName: i.itemName, weight: i.weight, wastage: '', rate: '' })));
-            setWPreviousOldBalance(String(txn.oldBalanceBefore || 0));
+            // The underlying Stock item's own itemName is sometimes blank
+            // (older stock records only had category/designName filled in) —
+            // fall back through the other identifying fields so the bill
+            // never shows an empty Item Name, matching the same fallback
+            // IssueLineStockScreen.js's own product table already uses.
+            setWIssuedItems((txn.issuedProducts || []).map(i => ({ itemName: i.itemName || i.category || i.itemNumber || 'Item', weight: i.weight, wastage: '', rate: '' })));
+            // Live customer balance, never the stale Issue-time snapshot —
+            // matches wPreviousAdvanceBalance below (same fetch).
+            setWPreviousOldBalance(String(txn.customerId?.oldBalance || 0));
             setWPreviousAdvanceBalance(String(txn.customerId?.advance || 0));
             setEditingBill(true);
           }
@@ -182,61 +189,62 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
   };
   const handleDeleteWReceivedItem = (id) => setWReceivedItems(items => items.filter(i => i.id !== id));
 
+  // The actual MongoDB write for the Wastage bill — shared by "Save Bill" and
+  // by Print/WhatsApp (which must never print an unsaved bill missing its
+  // Bill Number; see saveWastageBillIfNeeded below).
+  const saveWastageBillNow = async () => {
+    const payload = {
+      issuedItems: wIssuedComputed.map(({ itemName, weight, wastage, rate, ww, cash }) => ({
+        itemName, weight: parseFloat(weight) || 0, wastage: parseFloat(wastage) || 0, rate: parseFloat(rate) || 0, ww, cash,
+      })),
+      receivedItems: wReceivedComputed.map(({ receiptType, weight, rate, cash }) => ({
+        receiptType, weight, rate, cash,
+      })),
+      paymentMode: wPaymentMode,
+      collectedAmount: wCollected,
+      oldBalanceBefore: wPreviousOld,
+      advanceBalanceBefore: wPreviousAdvance,
+      oldBalanceAfter: wFinalBalResult.oldBalance,
+      advanceBalanceAfter: wFinalBalResult.advanceBalance,
+      subtractionAmount: wSubtraction,
+      reminderDate: wReminderDate ? wReminderDate.toISOString() : null,
+    };
+    const res = await lineStockAPI.saveWastageBill(transactionId, payload);
+    if (!res.data.success) throw new Error(res.data.message || 'Failed to save bill.');
+    setTransaction(res.data.data);
+    setEditingBill(false);
+    return res.data.data;
+  };
+
   const handleSaveWastageBill = async () => {
     setSavingWastageBill(true);
     try {
-      const payload = {
-        issuedItems: wIssuedComputed.map(({ itemName, weight, wastage, rate, ww, cash }) => ({
-          itemName, weight: parseFloat(weight) || 0, wastage: parseFloat(wastage) || 0, rate: parseFloat(rate) || 0, ww, cash,
-        })),
-        receivedItems: wReceivedComputed.map(({ receiptType, weight, rate, cash }) => ({
-          receiptType, weight, rate, cash,
-        })),
-        paymentMode: wPaymentMode,
-        collectedAmount: wCollected,
-        oldBalanceBefore: wPreviousOld,
-        advanceBalanceBefore: wPreviousAdvance,
-        oldBalanceAfter: wFinalBalResult.oldBalance,
-        advanceBalanceAfter: wFinalBalResult.advanceBalance,
-        subtractionAmount: wSubtraction,
-        reminderDate: wReminderDate ? wReminderDate.toISOString() : null,
-      };
-      const res = await lineStockAPI.saveWastageBill(transactionId, payload);
-      if (res.data.success) {
-        setTransaction(res.data.data);
-        setEditingBill(false);
-        Alert.alert('Success', 'Bill Saved Successfully');
-      }
+      await saveWastageBillNow();
+      Alert.alert('Success', 'Bill Saved Successfully');
     } catch (e) {
-      Alert.alert('Error', e.response?.data?.message || 'Failed to save bill.');
+      Alert.alert('Error', e.response?.data?.message || e.message || 'Failed to save bill.');
     } finally {
       setSavingWastageBill(false);
     }
   };
 
-  // Builds the object to print/share — reflects the live on-screen state
-  // (including unsaved edits) so Print always matches what's currently shown.
-  const buildPrintTransaction = () => {
+  // Print/WhatsApp must always reflect what's actually saved in MongoDB — a
+  // Wastage bill's Bill Number is only generated once it's saved, so printing
+  // before Save Bill would show a blank Bill No (and any live-edited values
+  // that never made it to the database). Save first (using whatever is
+  // currently on screen) if it hasn't been saved yet, then build from the
+  // confirmed saved transaction.
+  const saveWastageBillIfNeeded = async () => {
+    if (transaction.wastageBill) return transaction;
+    return saveWastageBillNow();
+  };
+
+  // Builds the object to print/share from confirmed saved data — never from
+  // empty/temporary in-memory variables.
+  const buildPrintTransaction = async () => {
     if (billStyle !== 'WASTAGE') return { ...transaction, billStyle };
-    return {
-      ...transaction,
-      billStyle,
-      wastageBill: {
-        billNo: transaction.wastageBill?.billNo,
-        issuedItems: wIssuedComputed.map(({ itemName, weight, wastage, rate, ww, cash }) => ({
-          itemName, weight: parseFloat(weight) || 0, wastage: parseFloat(wastage) || 0, rate: parseFloat(rate) || 0, ww, cash,
-        })),
-        receivedItems: wReceivedComputed.map(({ receiptType, weight, rate, cash }) => ({ receiptType, weight, rate, cash })),
-        paymentMode: wPaymentMode,
-        collectedAmount: wCollected,
-        oldBalanceBefore: wPreviousOld,
-        advanceBalanceBefore: wPreviousAdvance,
-        oldBalanceAfter: wFinalBalResult.oldBalance,
-        advanceBalanceAfter: wFinalBalResult.advanceBalance,
-        subtractionAmount: wSubtraction,
-        reminderDate: wReminderDate ? wReminderDate.toISOString() : null,
-      },
-    };
+    const saved = await saveWastageBillIfNeeded();
+    return { ...saved, billStyle };
   };
 
   const withPrintLock = async (stateSetter, fn) => {
@@ -295,8 +303,7 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {billStyle === 'WASTAGE' ? (
           <View style={styles.billCard}>
-            <Text style={styles.shopName}>SRI VAISHNAVI JEWELLERS</Text>
-            <Text style={styles.billType}>B2C BILL</Text>
+            <Text style={styles.billType}>LINE STOCK BILL</Text>
             <View style={styles.divider} />
 
             <View style={styles.row}><Text style={styles.label}>Bill No:</Text><Text style={styles.value}>{transaction.wastageBill?.billNo || 'Generating on save…'}</Text></View>
@@ -305,8 +312,8 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
 
             <View style={styles.divider} />
             <Text style={styles.sectionTitle}>CUSTOMER DETAILS</Text>
-            <View style={styles.row}><Text style={styles.label}>Customer Name:</Text><Text style={styles.value}>{transaction.customerId?.customerName}</Text></View>
-            <View style={styles.row}><Text style={styles.label}>Phone Number:</Text><Text style={styles.value}>{transaction.customerId?.phoneNumber}</Text></View>
+            <View style={styles.row}><Text style={styles.label}>Customer Name:</Text><Text style={styles.value}>{transaction.customerId?.customerName || 'N/A'}</Text></View>
+            <View style={styles.row}><Text style={styles.label}>Phone Number:</Text><Text style={styles.value}>{transaction.customerId?.phoneNumber || 'N/A'}</Text></View>
             <View style={styles.row}><Text style={styles.label}>Old Balance:</Text><Text style={styles.value}>₹{wPreviousOld.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
 
             <View style={styles.divider} />
@@ -320,7 +327,7 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
             {wIssuedComputed.map((item, idx) => (
               <View key={idx}>
                 <View style={styles.tableDataRow}>
-                  <Text style={[styles.tableCellText, {flex: 2.2}]}>{item.itemName}</Text>
+                  <Text style={[styles.tableCellText, {flex: 2.2}]}>{item.itemName || 'Item'}</Text>
                   <Text style={[styles.tableCellText, {flex: 1.2}]}>{item.ww.toFixed(4)}</Text>
                   <Text style={[styles.tableCellText, {flex: 1.2}]}>{safeNumber(item.rate).toFixed(0)}</Text>
                   <Text style={[styles.tableCellText, {flex: 1.4, textAlign: 'right'}]}>{item.cash.toLocaleString('en-IN', {maximumFractionDigits:0})}</Text>
@@ -468,8 +475,7 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
           </View>
         ) : (
           <View style={styles.billCard}>
-            <Text style={styles.shopName}>SRI VAISHNAVI JEWELLERS</Text>
-            <Text style={styles.billType}>LINE STOCK ISSUE BILL</Text>
+            <Text style={styles.billType}>LINE STOCK BILL</Text>
             <View style={styles.divider} />
 
             <View style={styles.row}>
@@ -488,15 +494,15 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
             <View style={styles.divider} />
 
             <Text style={styles.sectionTitle}>LINE STOCKER</Text>
-            <View style={styles.row}><Text style={styles.label}>Name:</Text><Text style={styles.value}>{transaction.customerId?.customerName}</Text></View>
-            <View style={styles.row}><Text style={styles.label}>Phone:</Text><Text style={styles.value}>{transaction.customerId?.phoneNumber}</Text></View>
+            <View style={styles.row}><Text style={styles.label}>Name:</Text><Text style={styles.value}>{transaction.customerId?.customerName || 'N/A'}</Text></View>
+            <View style={styles.row}><Text style={styles.label}>Phone:</Text><Text style={styles.value}>{transaction.customerId?.phoneNumber || 'N/A'}</Text></View>
 
             <View style={styles.divider} />
 
             <Text style={styles.sectionTitle}>ISSUED PRODUCTS</Text>
             {transaction.issuedProducts?.map((item, idx) => (
               <View key={idx} style={styles.itemRow}>
-                <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.itemName} ({item.itemNumber})</Text><Text style={styles.itemSub}>Barcode: {item.barcode || 'N/A'} | {item.category} | {item.purity}</Text></View>
+                <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.itemName || 'Item'} ({item.itemNumber || 'N/A'})</Text><Text style={styles.itemSub}>Barcode: {item.barcode || 'N/A'} | {item.category} | {item.purity}</Text></View>
                 <View style={{ alignItems: 'flex-end' }}><Text style={styles.itemCount}>{item.count} pcs</Text><Text style={styles.itemWeight}>{Number(item.weight).toFixed(3)} g</Text></View>
               </View>
             ))}
@@ -508,8 +514,16 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
 
             <View style={styles.divider} />
 
-            <View style={styles.row}><Text style={styles.label}>Old Balance Before:</Text><Text style={styles.value}>{Number(transaction.oldBalanceBefore).toFixed(3)}g</Text></View>
-            <View style={styles.row}><Text style={styles.label}>Old Balance After:</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>{Number(transaction.oldBalanceAfter).toFixed(3)}g</Text></View>
+            <View style={styles.row}>
+              <Text style={styles.label}>{transaction.advanceBalanceBefore > 0 ? 'Advance Balance Before:' : 'Old Balance Before:'}</Text>
+              <Text style={styles.value}>{Number(transaction.advanceBalanceBefore > 0 ? transaction.advanceBalanceBefore : transaction.oldBalanceBefore).toFixed(3)}g</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>{transaction.advanceBalanceAfter > 0 ? 'Advance Balance After:' : 'Old Balance After:'}</Text>
+              <Text style={[styles.summaryValue, { color: transaction.advanceBalanceAfter > 0 ? '#27AE60' : '#D32F2F' }]}>
+                {Number(transaction.advanceBalanceAfter > 0 ? transaction.advanceBalanceAfter : transaction.oldBalanceAfter).toFixed(3)}g
+              </Text>
+            </View>
 
             {editingBill && (
               <>
@@ -574,7 +588,7 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
           <TouchableOpacity
             style={[styles.actionBtn, (printing || sharing) && { opacity: 0.6 }]}
             disabled={printing || sharing}
-            onPress={() => withPrintLock(setPrinting, () => LineStockPrintService.printBill(buildPrintTransaction()))}
+            onPress={() => withPrintLock(setPrinting, async () => LineStockPrintService.printBill(await buildPrintTransaction()))}
           >
             {printing ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="printer" size={20} color="#FFF" />}
             <Text style={styles.actionText}>{printing ? 'Printing…' : 'Print Bill'}</Text>
@@ -583,7 +597,7 @@ export default function LineStockBillPreviewScreen({ route, navigation }) {
           <TouchableOpacity
             style={[styles.actionBtn, {backgroundColor: '#25D366'}, (printing || sharing) && { opacity: 0.6 }]}
             disabled={printing || sharing}
-            onPress={() => withPrintLock(setSharing, () => LineStockPrintService.shareWhatsApp(buildPrintTransaction()))}
+            onPress={() => withPrintLock(setSharing, async () => LineStockPrintService.shareWhatsApp(await buildPrintTransaction()))}
           >
             {sharing ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="whatsapp" size={20} color="#FFF" />}
             <Text style={styles.actionText}>{sharing ? 'Sharing…' : 'WhatsApp'}</Text>

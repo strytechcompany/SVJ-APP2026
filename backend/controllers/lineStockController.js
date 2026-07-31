@@ -140,8 +140,27 @@ exports.issueStock = async (req, res) => {
       totalItems += parseInt(item.count);
     }
 
+    // Before/After here is a PROJECTION only — "if this bill is saved as-is,
+    // this is what the balance would become". The real commit happens on
+    // "Save Bill" (PLUS style, see updateBillStyle below) or when a Wastage
+    // bill is chosen. Case 1 (Old Balance active): Current Old = Previous Old
+    // + Issued. Case 2 (Advance active): Current Advance = Previous Advance -
+    // Issued; if that goes negative, it converts to Old Balance = the
+    // absolute value (never both non-zero at once).
     const oldBalanceBefore = customer.oldBalance;
-    const oldBalanceAfter = oldBalanceBefore + totalGram;
+    const advanceBalanceBefore = customer.advance;
+    let oldBalanceAfter, advanceBalanceAfter;
+    if (advanceBalanceBefore > 0 && oldBalanceBefore === 0) {
+      const net = totalGram - advanceBalanceBefore;
+      if (net < 0) { advanceBalanceAfter = Math.abs(net); oldBalanceAfter = 0; }
+      else { advanceBalanceAfter = 0; oldBalanceAfter = net; }
+    } else {
+      const net = totalGram + oldBalanceBefore;
+      if (net < 0) { oldBalanceAfter = 0; advanceBalanceAfter = Math.abs(net); }
+      else { oldBalanceAfter = net; advanceBalanceAfter = 0; }
+    }
+    oldBalanceAfter = parseFloat(oldBalanceAfter.toFixed(3));
+    advanceBalanceAfter = parseFloat(advanceBalanceAfter.toFixed(3));
 
     // Phase 2: validate transaction document before touching any stock/customer
     const transaction = new LineStockTransaction({
@@ -152,6 +171,8 @@ exports.issueStock = async (req, res) => {
       totalGram,
       oldBalanceBefore,
       oldBalanceAfter,
+      advanceBalanceBefore,
+      advanceBalanceAfter,
       description,
       issuedProducts,
       status: 'ACTIVE',
@@ -161,15 +182,13 @@ exports.issueStock = async (req, res) => {
 
     await transaction.validate();
 
-    // Phase 3: all checks passed — now write stock, customer, transaction
+    // Phase 3: all checks passed — now write stock and the transaction.
+    // Customer balance is untouched here (see comment above).
     for (const { stock, count } of stockUpdates) {
       stock.quantity -= count;
       if (stock.quantity === 0) stock.isAvailable = false;
       await stock.save();
     }
-
-    customer.oldBalance = oldBalanceAfter;
-    await customer.save();
 
     await transaction.save();
 
@@ -185,28 +204,59 @@ exports.issueStock = async (req, res) => {
 };
 
 // ─── Update Bill Style (Plus/Wastage print layout) + Notes ────────────────────
-// Purely presentational — never touches stock, balance, or any saved
-// calculation. Allowed regardless of ACTIVE/SETTLED status, since it doesn't
-// affect the settlement math.
+// For a PLUS-style bill, this is also the real "Save Bill" — the ONE place
+// the customer's balance actually changes for a Line Stock issue (Settlement
+// no longer touches it). Always reads the customer's LIVE balance from
+// MongoDB (never a cached/stale value) and applies it exactly once per
+// transaction (balanceApplied guards against a repeat Save Bill re-adding it).
 exports.updateBillStyle = async (req, res) => {
   try {
     const { billStyle, description } = req.body;
     if (billStyle !== undefined && billStyle !== null && !['PLUS', 'WASTAGE'].includes(billStyle)) {
       return res.status(400).json({ success: false, message: 'billStyle must be PLUS or WASTAGE' });
     }
-    const transaction = await LineStockTransaction.findByIdAndUpdate(
-      req.params.id,
-      {
-        $set: {
-          ...(billStyle !== undefined && { billStyle }),
-          ...(description !== undefined && { description }),
-        },
-      },
-      { new: true }
-    );
+
+    const transaction = await LineStockTransaction.findById(req.params.id);
     if (!transaction) {
       return res.status(404).json({ success: false, message: 'Transaction not found' });
     }
+
+    if (billStyle === 'PLUS' && !transaction.balanceApplied) {
+      const customer = await Customer.findById(transaction.customerId);
+      if (!customer) {
+        return res.status(404).json({ success: false, message: 'Customer not found' });
+      }
+
+      const previousOldBalance = customer.oldBalance;
+      const previousAdvanceBalance = customer.advance;
+      let oldBalanceAfter, advanceBalanceAfter;
+      if (previousAdvanceBalance > 0 && previousOldBalance === 0) {
+        const net = transaction.totalGram - previousAdvanceBalance;
+        if (net < 0) { advanceBalanceAfter = Math.abs(net); oldBalanceAfter = 0; }
+        else { advanceBalanceAfter = 0; oldBalanceAfter = net; }
+      } else {
+        const net = transaction.totalGram + previousOldBalance;
+        if (net < 0) { oldBalanceAfter = 0; advanceBalanceAfter = Math.abs(net); }
+        else { oldBalanceAfter = net; advanceBalanceAfter = 0; }
+      }
+      oldBalanceAfter = parseFloat(oldBalanceAfter.toFixed(3));
+      advanceBalanceAfter = parseFloat(advanceBalanceAfter.toFixed(3));
+
+      customer.oldBalance = oldBalanceAfter;
+      customer.advance = advanceBalanceAfter;
+      await customer.save();
+
+      transaction.oldBalanceBefore = previousOldBalance;
+      transaction.oldBalanceAfter = oldBalanceAfter;
+      transaction.advanceBalanceBefore = previousAdvanceBalance;
+      transaction.advanceBalanceAfter = advanceBalanceAfter;
+      transaction.balanceApplied = true;
+    }
+
+    if (billStyle !== undefined) transaction.billStyle = billStyle;
+    if (description !== undefined) transaction.description = description;
+    await transaction.save();
+
     res.json({ success: true, data: transaction });
   } catch (error) {
     console.error('updateBillStyle error:', error);
@@ -326,17 +376,37 @@ exports.updateTransaction = async (req, res) => {
     const newTotalItems = newIssuedProducts.reduce((s, i) => s + (parseInt(i.count) || 1), 0);
     const newTotalGram = parseFloat(newIssuedProducts.reduce((s, i) => s + (parseFloat(i.weight) || 0), 0).toFixed(3));
 
-    // Delta-based balance adjustment — preserves any other changes made to the
-    // customer's balance since this transaction was first issued.
-    const balanceDelta = parseFloat((newTotalGram - (transaction.totalGram || 0)).toFixed(3));
-    if (Math.abs(balanceDelta) > 0.0001) {
-      await Customer.findByIdAndUpdate(transaction.customerId, { $inc: { oldBalance: balanceDelta } });
+    // Before Save Bill, this is a PROJECTION only, recomputed off this
+    // transaction's own Before snapshot. Once Save Bill has already committed
+    // it to the customer (balanceApplied), an edit here must keep the real
+    // balance in sync: undo the old commit (restore Before), then reapply
+    // with the updated totalGram — same mutual-exclusive formula throughout.
+    const oldBalanceBefore = transaction.oldBalanceBefore || 0;
+    const advanceBalanceBefore = transaction.advanceBalanceBefore || 0;
+    let oldBalanceAfter, advanceBalanceAfter;
+    if (advanceBalanceBefore > 0 && oldBalanceBefore === 0) {
+      const net = newTotalGram - advanceBalanceBefore;
+      if (net < 0) { advanceBalanceAfter = Math.abs(net); oldBalanceAfter = 0; }
+      else { advanceBalanceAfter = 0; oldBalanceAfter = net; }
+    } else {
+      const net = newTotalGram + oldBalanceBefore;
+      if (net < 0) { oldBalanceAfter = 0; advanceBalanceAfter = Math.abs(net); }
+      else { oldBalanceAfter = net; advanceBalanceAfter = 0; }
+    }
+    oldBalanceAfter = parseFloat(oldBalanceAfter.toFixed(3));
+    advanceBalanceAfter = parseFloat(advanceBalanceAfter.toFixed(3));
+
+    if (transaction.balanceApplied) {
+      customer.oldBalance = oldBalanceAfter;
+      customer.advance = advanceBalanceAfter;
+      await customer.save();
     }
 
     transaction.issuedProducts = newIssuedProducts;
     transaction.totalItems = newTotalItems;
     transaction.totalGram = newTotalGram;
-    transaction.oldBalanceAfter = parseFloat(((transaction.oldBalanceBefore || 0) + newTotalGram).toFixed(3));
+    transaction.oldBalanceAfter = parseFloat(oldBalanceAfter.toFixed(3));
+    transaction.advanceBalanceAfter = parseFloat(advanceBalanceAfter.toFixed(3));
     if (expectedReturnDate) transaction.expectedReturnDate = expectedReturnDate;
     if (description !== undefined) transaction.description = description;
 

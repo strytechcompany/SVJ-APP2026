@@ -39,9 +39,19 @@ exports.createStock = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Item Number must contain letters and numbers only (e.g. TH001, CH002).' });
     }
 
-    const duplicate = await Stock.findOne({ itemNumber: inTrimmed });
+    // Duplicate check validates ONLY Active Stock — a sold-out/unavailable item
+    // no longer blocks re-uploading the same Item Number as a new stock record.
+    const duplicate = await Stock.findOne({ itemNumber: inTrimmed, isActive: { $ne: false }, isAvailable: { $ne: false } });
     if (duplicate) {
       return res.status(400).json({ success: false, message: `Item Number "${inTrimmed}" already exists. Use a unique Item Number.` });
+    }
+
+    const trimmedBarcode = barcode?.trim();
+    if (trimmedBarcode) {
+      const duplicateBarcode = await Stock.findOne({ barcode: trimmedBarcode, isActive: { $ne: false }, isAvailable: { $ne: false } });
+      if (duplicateBarcode) {
+        return res.status(400).json({ success: false, message: `Barcode "${trimmedBarcode}" already exists. Use a unique barcode.` });
+      }
     }
 
     const stock = new Stock({
@@ -71,6 +81,10 @@ exports.createStock = async (req, res) => {
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map((e) => e.message);
       return res.status(400).json({ success: false, message: messages.join(', ') });
+    }
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0] || 'Item Number/Barcode';
+      return res.status(400).json({ success: false, message: `${field} already exists on an active stock item. Use a unique value.` });
     }
     console.error('createStock error:', error.message);
     res.status(500).json({ success: false, message: 'Server error creating stock' });

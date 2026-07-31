@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { resolveDisplayBalance } from '../../utils/balanceDisplay';
+import { resolveDisplayBalance, formatBalanceForCustomer } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#5C3A00';
@@ -44,7 +44,9 @@ export default function TransactionCustomerCard({ customer, onPress }) {
           <View>
             <Text style={styles.nameText}>{customerName}</Text>
             <Text style={styles.phoneText}>+91 {phoneNumber}</Text>
-            {customer.customerCategory ? (
+            {customer.customerType === 'B2D' ? (
+              <Text style={styles.categoryText}>B2D Customer</Text>
+            ) : customer.customerCategory ? (
               <Text style={styles.categoryText}>
                 {customer.customerCategory === 'WASTAGE' ? 'Wastage Customer' : 'Plus Customer'}
               </Text>
@@ -56,7 +58,7 @@ export default function TransactionCustomerCard({ customer, onPress }) {
           <View style={styles.balanceItem}>
             <Text style={styles.balanceLabel}>{balanceLabel}</Text>
             <Text style={balanceStyle}>
-              ₹{balanceValue.toLocaleString('en-IN')}
+              {formatBalanceForCustomer(balanceValue, customer)}
             </Text>
           </View>
         </View>

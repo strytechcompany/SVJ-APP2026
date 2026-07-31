@@ -20,6 +20,7 @@ const lineStockRoutes = require('./routes/lineStockRoutes');
 const settingRoutes = require('./routes/settingRoutes');
 const userRoutes = require('./routes/userRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const balanceSettlementRoutes = require('./routes/balanceSettlementRoutes');
 const { loadUsers } = require('./services/authStore');
 const Customer = require('./models/Customer');
 
@@ -48,6 +49,7 @@ app.use('/api/linestock', lineStockRoutes);
 app.use('/api/settings', settingRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/balance-settlement', balanceSettlementRoutes);
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -115,10 +117,31 @@ const dropLegacyCustomerIndexes = async () => {
   }
 };
 
+// Drops the old plain-unique itemNumber/barcode indexes so Mongoose's
+// autoIndex can recreate them as partial-unique (scoped to isAvailable: true —
+// see models/Stock.js). Without this, a sold-out item's Item Number/Barcode
+// would still be held hostage by the deleted-in-spirit-but-not-in-the-index
+// legacy index, falsely blocking re-uploading the same Item Number.
+const migrateStockIndexes = async () => {
+  try {
+    const Stock = require('./models/Stock');
+    const indexes = await Stock.collection.indexes();
+    for (const idx of indexes) {
+      if ((idx.name === 'itemNumber_1' || idx.name === 'barcode_1') && idx.unique && !idx.partialFilterExpression) {
+        await Stock.collection.dropIndex(idx.name);
+        console.log(`[Stock] Dropped legacy full-uniqueness index: ${idx.name}`);
+      }
+    }
+  } catch (error) {
+    console.warn(`[Stock] Unable to migrate indexes: ${error.message}`);
+  }
+};
+
 const startServer = async () => {
   try {
     await connectDB();
     await dropLegacyCustomerIndexes();
+    await migrateStockIndexes();
     await Customer.initializeCounters();
   } catch (error) {
     console.error(`[FATAL] MongoDB connection failed: ${error.message}`);

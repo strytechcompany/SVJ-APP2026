@@ -2,6 +2,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { settingsAPI } from './api';
 import { safeNumber } from '../utils/safeNumber';
+import { formatBalanceForCustomer, resolveDisplayBalance } from '../utils/balanceDisplay';
 
 // ─── Module-level singleton lock ──────────────────────────────────────────────
 // expo-print's native layer only allows ONE print/file operation at a time.
@@ -604,7 +605,6 @@ const generateThermalReceiptHTML = async (transaction, customTamilMsg) => {
             ${renderRow('Previous Old Balance', `₹${formatMoney(safeNumber(oldBalanceBefore))}`)}
             ${renderRow('Previous Advance Balance', `₹${formatMoney(safeNumber(advanceBalanceBefore))}`)}
             ${renderRow(safeNumber(oldBalanceAfter) > 0 ? 'Current Old Balance' : 'Current Advance Balance', `₹${formatMoney(safeNumber(oldBalanceAfter) > 0 ? oldBalanceAfter : advanceBalanceAfter)}`)}
-            ${safeNumber(wastageSubtractionAmount) > 0 ? renderRow('Subtraction Amount', `₹${formatMoney(safeNumber(wastageSubtractionAmount))}`) : ''}
             ${reminderDate ? renderRow('Reminder Date', new Date(reminderDate).toLocaleDateString('en-GB')) : ''}
           ` : isPlusBill ? `
             ${renderRow('Total Issue Pure', formatGram(safeNumber(issueTotalPurity)))}
@@ -750,13 +750,8 @@ const generateSettlementHTML = async (settlement, originalBillNumber) => {
       </head>
       <body>
         <div class="receipt-container">
-          <div class="center bold" style="font-size:16px;">SRI VAISHNAVI JEWELLERS</div>
-          <div class="center">No 370, Big Bazaar Street</div>
-        <div class="center">(Opp - B.G. Naidu Sweets)</div>
-        <div class="center">Phone: 8248134521</div>
-        <div class="divider"></div>
-        <div class="center bold" style="font-size:14px;">SETTLEMENT RECEIPT</div>
-        <div class="divider"></div>
+          <div class="center bold" style="font-size:14px;">SETTLEMENT RECEIPT</div>
+          <div class="divider"></div>
         <div class="row"><div>Receipt No:</div><div class="bold">${settlement.settlementBillNumber}</div></div>
         <div class="row"><div>Original Bill:</div><div class="bold">${originalBillNumber}</div></div>
         <div class="row"><div>Date/Time:</div><div>${dateStr} ${timeStr}</div></div>
@@ -838,7 +833,7 @@ const generateLineStockWastageBillHTML = (transaction) => {
 
   const issueRows = issuedItems.map(item => `
     <tr>
-      <td>${escapeHtml(item.itemName || '-')}</td>
+      <td>${escapeHtml(item.itemName || 'Item')}</td>
       <td>${safeNumber(item.ww).toFixed(4)}</td>
       <td>${safeNumber(item.rate).toFixed(0)}</td>
       <td style="text-align:right;">${safeNumber(item.cash).toLocaleString('en-IN', {maximumFractionDigits:0})}</td>
@@ -874,15 +869,10 @@ const generateLineStockWastageBillHTML = (transaction) => {
       </head>
       <body>
         <div class="receipt-container">
-          <div class="center bold" style="font-size:16px;">SRI VAISHNAVI JEWELLERS</div>
-          <div class="center">No 370, Big Bazaar Street</div>
-          <div class="center">(Opp - B.G. Naidu Sweets)</div>
-          <div class="center">Phone: 8248134521</div>
-          <div class="divider"></div>
-          <div class="center bold" style="font-size:14px;">B2C BILL</div>
+          <div class="center bold" style="font-size:14px;">LINE STOCK BILL</div>
           <div class="divider"></div>
 
-          <div class="row"><div>Bill No:</div><div class="bold">${escapeHtml(wb.billNo || '')}</div></div>
+          <div class="row"><div>Bill No:</div><div class="bold">${escapeHtml(wb.billNo || 'Pending')}</div></div>
           <div class="row"><div>Date:</div><div>${dateStr}</div></div>
           <div class="row"><div>Time:</div><div>${timeStr}</div></div>
 
@@ -998,13 +988,8 @@ const generateLineStockHTML = (transaction) => {
       </head>
       <body>
         <div class="receipt-container">
-          <div class="center bold" style="font-size:16px;">SRI VAISHNAVI JEWELLERS</div>
-          <div class="center">No 370, Big Bazaar Street</div>
-        <div class="center">(Opp - B.G. Naidu Sweets)</div>
-        <div class="center">Phone: 8248134521</div>
-        <div class="divider"></div>
-        <div class="center bold" style="font-size:14px;">${transaction.billStyle === 'PLUS' ? 'PLUS BILL' : transaction.billStyle === 'WASTAGE' ? 'WASTAGE BILL' : 'LINE STOCK ISSUE BILL'}</div>
-        <div class="divider"></div>
+          <div class="center bold" style="font-size:14px;">LINE STOCK BILL</div>
+          <div class="divider"></div>
 
         <div class="row"><div>Txn No:</div><div class="bold">${transaction.transactionNumber}</div></div>
         <div class="row"><div>Date/Time:</div><div>${dateStr} ${timeStr}</div></div>
@@ -1083,72 +1068,53 @@ export const LineStockPrintService = {
 };
 
 // ─── Line Stock Settlement HTML generator ─────────────────────────────────────
-// Case 1 (Old Balance active, or neither): Final = (Issue Total + Previous Old) - Receipt Total.
-// Case 2 (Advance active): Final = Issue Total - (Previous Advance + Receipt Total).
-// Shared by both the settlement's PLUS (gram) and WASTAGE (cash) bill structures.
-const computeSettlementCase1Case2Balance = (oldBefore, advanceBefore, issueTotal, receiptTotal) => {
-  if (advanceBefore > 0 && oldBefore === 0) {
-    const final = safeNumber(issueTotal - (advanceBefore + receiptTotal));
-    return final < 0
-      ? { oldAfter: safeNumber(Math.abs(final)), advanceAfter: 0 }
-      : { oldAfter: 0, advanceAfter: final };
-  }
-  const final = safeNumber((issueTotal + oldBefore) - receiptTotal);
-  return final < 0
-    ? { oldAfter: 0, advanceAfter: safeNumber(Math.abs(final)) }
-    : { oldAfter: final, advanceAfter: 0 };
-};
-
+// Previous/Current balance is NEVER recalculated here — it is read straight
+// off the settlement's saved fields (the ONE calculation performed by
+// createSettlement on the backend), matching the Bill Preview screen exactly.
 const generateLineStockSettlementPlusOrWastageHTML = (settlement) => {
   const dateStr = new Date(settlement.createdAt).toLocaleDateString('en-GB');
   const timeStr = new Date(settlement.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   const isPlus = settlement.billStyle === 'PLUS';
   const bill = isPlus ? (settlement.plusBill || {}) : (settlement.wastageBill || {});
   const issuedItems = bill.issuedItems || [];
-  const receivedItems = bill.receivedItems || [];
-  const oldBalanceBefore = safeNumber(bill.oldBalanceBefore);
-  const advanceBalanceBefore = safeNumber(bill.advanceBalanceBefore);
-  const oldBalanceAfter = safeNumber(bill.oldBalanceAfter);
-  const advanceBalanceAfter = safeNumber(bill.advanceBalanceAfter);
-  const prevIsAdvance = advanceBalanceBefore > 0 && oldBalanceBefore === 0;
-  const currentIsOld = oldBalanceAfter > 0;
 
+  // PLUS stays gram-based — single source of truth is the real settlement
+  // balance. WASTAGE converts to cash via the Balance Rate the admin
+  // entered; that cash-conversion (previousBalanceCash/currentOldBalanceCash
+  // /currentAdvanceBalanceCash) was already computed once on Save Bill and
+  // is read here verbatim, never recalculated. The Old-vs-Advance label is
+  // the same either way (it's the same real gram balance being labelled).
+  const prevResolved = resolveDisplayBalance(settlement.previousBalance, settlement.advanceBalanceBefore);
+  const finalResolved = isPlus
+    ? resolveDisplayBalance(settlement.finalBalance, settlement.advanceBalance)
+    : resolveDisplayBalance(bill.currentOldBalanceCash, bill.currentAdvanceBalanceCash);
+  const prevLabel = prevResolved.label === 'Current Balance' ? 'Previous Balance' : `Previous ${prevResolved.label}`;
+  const finalLabel = finalResolved.label;
+  const finalColor = finalLabel === 'Old Balance' ? 'red' : (finalLabel === 'Advance' ? 'green' : '#000');
+
+  // Sold items are never returned, so neither bill style ever shows a
+  // Received/Receipt Items section — Receipt total is always 0.
   const totalIssue = isPlus
-    ? safeNumber(issuedItems.reduce((s, i) => s + safeNumber(i.purity), 0))
+    ? safeNumber(issuedItems.reduce((s, i) => s + safeNumber(i.weight), 0))
     : safeNumber(issuedItems.reduce((s, i) => s + safeNumber(i.cash), 0));
-  const totalReceipt = isPlus
-    ? safeNumber(receivedItems.reduce((s, i) => s + safeNumber(i.purity), 0))
-    : safeNumber(receivedItems.reduce((s, i) => s + safeNumber(i.cash), 0));
+  const totalIssueWeight = safeNumber(issuedItems.reduce((s, i) => s + safeNumber(i.weight), 0));
 
+  const fmtCash = (v) => isPlus ? `${Number(v).toFixed(3)}g` : `Rs.${formatMoney(v)}`;
+  // Balance figures: grams for Plus, cash (never grams) for Wastage.
   const fmtBal = (v) => isPlus ? `${Number(v).toFixed(3)}g` : `Rs.${formatMoney(v)}`;
+  const prevBalDisplay = isPlus ? `${prevResolved.value.toFixed(3)}g` : `Rs.${formatMoney(bill.previousBalanceCash)}`;
+  const finalBalDisplay = fmtBal(finalResolved.value);
 
   const issuedRows = issuedItems.map(item => isPlus ? `
     <tr>
       <td>${escapeHtml(item.itemName || '-')}</td>
       <td>${fmt4(item.weight)}</td>
-      <td>${fmtPurity(item.actualTouch)}</td>
-      <td>${fmt4(safeNumber(item.purity))}</td>
     </tr>
   ` : `
     <tr>
       <td>${escapeHtml(item.itemName || '-')}</td>
       <td>${fmt4(item.weight)}</td>
-      <td>${formatMoneyInt(item.rate)}</td>
-      <td>${formatMoneyInt(item.cash)}</td>
-    </tr>
-  `).join('');
-
-  const receivedRows = receivedItems.map(item => isPlus ? `
-    <tr>
-      <td>${escapeHtml(item.itemName || '-')}</td>
-      <td>${fmt4(item.weight)}</td>
-      <td>${fmtPurity(item.buyingTouch)}</td>
-      <td>${fmt4(safeNumber(item.purity))}</td>
-    </tr>
-  ` : `
-    <tr>
-      <td>${escapeHtml(item.itemName || '-')}</td>
-      <td>${fmt4(item.weight)}</td>
+      <td>${safeNumber(item.wastage).toFixed(1)}</td>
       <td>${formatMoneyInt(item.rate)}</td>
       <td>${formatMoneyInt(item.cash)}</td>
     </tr>
@@ -1175,11 +1141,6 @@ const generateLineStockSettlementPlusOrWastageHTML = (settlement) => {
       </head>
       <body>
         <div class="receipt-container">
-          <div class="center bold" style="font-size:16px;">SRI VAISHNAVI JEWELLERS</div>
-          <div class="center">No 370, Big Bazaar Street</div>
-          <div class="center">(Opp - B.G. Naidu Sweets)</div>
-          <div class="center">Phone: 8248134521</div>
-          <div class="divider"></div>
           <div class="center bold" style="font-size:14px;">LINE STOCK BILL</div>
           <div class="divider"></div>
 
@@ -1191,34 +1152,39 @@ const generateLineStockSettlementPlusOrWastageHTML = (settlement) => {
           <div class="bold">CUSTOMER DETAILS</div>
           <div class="row"><div>Customer Name:</div><div>${escapeHtml(settlement.customerId?.customerName || 'N/A')}</div></div>
           <div class="row"><div>Phone:</div><div>${escapeHtml(settlement.customerId?.phoneNumber || 'N/A')}</div></div>
-          <div class="row"><div>${prevIsAdvance ? 'Previous Advance Balance:' : 'Previous Old Balance:'}</div><div>${fmtBal(prevIsAdvance ? advanceBalanceBefore : oldBalanceBefore)}</div></div>
+          ${isPlus ? `<div class="row"><div>${prevLabel}:</div><div>${prevResolved.value.toFixed(3)}g</div></div>` : ''}
 
           <div class="divider"></div>
           <div class="bold">ISSUED PRODUCTS</div>
           <table>
             <thead>
-              <tr>${isPlus ? '<th>Item</th><th>Wt(g)</th><th>A.Tch%</th><th>Purity</th>' : '<th>Item</th><th>WW(g)</th><th>Rate</th><th>Cash</th>'}</tr>
+              <tr>${isPlus ? '<th>Item Name</th><th>Weight (g)</th>' : '<th>Item</th><th>Wt(g)</th><th>Wst(%)</th><th>Rate</th><th>Cash</th>'}</tr>
             </thead>
             <tbody>${issuedRows}</tbody>
           </table>
-          <div class="row bold"><div>${isPlus ? 'Total Issue Gram:' : 'Total Issue Cash:'}</div><div>${fmtBal(totalIssue)}</div></div>
+          ${!isPlus ? `<div class="row"><div>Total Weight:</div><div>${totalIssueWeight.toFixed(3)}g</div></div>` : ''}
+          <div class="row bold"><div>${isPlus ? 'Issued Weight:' : 'Total Cash:'}</div><div>${fmtCash(totalIssue)}</div></div>
 
+          ${!isPlus ? `
           <div class="divider"></div>
-          <div class="bold">RECEIVED ITEMS</div>
-          <table>
-            <thead>
-              <tr>${isPlus ? '<th>Item</th><th>Wt(g)</th><th>B.Tch%</th><th>Purity</th>' : '<th>Item</th><th>Wt(g)</th><th>Rate</th><th>Cash</th>'}</tr>
-            </thead>
-            <tbody>${receivedRows}</tbody>
-          </table>
-          <div class="row bold"><div>${isPlus ? 'Total Receipt Gram:' : 'Total Receipt Cash:'}</div><div>${fmtBal(totalReceipt)}</div></div>
+          <div class="row"><div>${prevLabel} (g):</div><div>${Number(bill.previousBalanceGram).toFixed(3)}g</div></div>
+          <div class="row"><div>Balance Rate:</div><div>Rs.${formatMoney(bill.balanceRate)}</div></div>
+          <div class="row"><div>Previous Balance Cash:</div><div>${prevBalDisplay}</div></div>
+          ` : ''}
+
+          ${!isPlus && (settlement.paymentDetails?.cash > 0 || settlement.paymentDetails?.gold > 0) ? `
+          <div class="divider"></div>
+          <div class="bold">PAYMENT DETAILS</div>
+          ${settlement.paymentDetails?.cash > 0 ? `<div class="row"><div>Cash:</div><div>Rs.${formatMoney(settlement.paymentDetails.cash)}</div></div>` : ''}
+          ${settlement.paymentDetails?.gold > 0 ? `<div class="row"><div>Gold:</div><div>${Number(settlement.paymentDetails.gold).toFixed(3)}g</div></div>` : ''}
+          ` : ''}
 
           <div class="divider"></div>
           <div class="bold">SUMMARY</div>
-          <div class="row"><div>${isPlus ? 'Total Issue Gram:' : 'Total Issue Cash:'}</div><div>${fmtBal(totalIssue)}</div></div>
-          <div class="row"><div>${isPlus ? 'Total Receipt Gram:' : 'Total Receipt Cash:'}</div><div>-${fmtBal(totalReceipt)}</div></div>
-          <div class="row"><div>${prevIsAdvance ? 'Previous Advance Balance:' : 'Previous Old Balance:'}</div><div>${fmtBal(prevIsAdvance ? advanceBalanceBefore : oldBalanceBefore)}</div></div>
-          <div class="row bold" style="color:${currentIsOld ? 'red' : 'green'};"><div>${currentIsOld ? 'Current Old Balance:' : 'Current Advance Balance:'}</div><div>${fmtBal(currentIsOld ? oldBalanceAfter : advanceBalanceAfter)}</div></div>
+          ${!isPlus ? `<div class="row"><div>Total Weight:</div><div>${totalIssueWeight.toFixed(3)}g</div></div>` : ''}
+          <div class="row"><div>${isPlus ? 'Issued Weight:' : 'Total Cash:'}</div><div>${fmtCash(totalIssue)}</div></div>
+          <div class="row"><div>${isPlus ? prevLabel : 'Previous Balance Cash'}:</div><div>${prevBalDisplay}</div></div>
+          <div class="row bold" style="color:${finalColor};"><div>${finalLabel}:</div><div>${finalBalDisplay}</div></div>
 
           ${settlement.remarks ? `<div class="divider"></div><div class="row"><div>Remarks:</div><div>${escapeHtml(settlement.remarks)}</div></div>` : ''}
 
@@ -1238,10 +1204,10 @@ const calculateLineStockSettlementPlusOrWastageHeight = (settlement) => {
   const isPlus = settlement.billStyle === 'PLUS';
   const bill = isPlus ? (settlement.plusBill || {}) : (settlement.wastageBill || {});
   const issuedCount = bill.issuedItems?.length || 0;
-  const receivedCount = bill.receivedItems?.length || 0;
   let h = 340;
   if (issuedCount > 0) h += 30 + (issuedCount * 18);
-  if (receivedCount > 0) h += 30 + (receivedCount * 18);
+  if (!isPlus) h += 70; // Balance Rate cash-conversion block
+  if (!isPlus && (settlement.paymentDetails?.cash > 0 || settlement.paymentDetails?.gold > 0)) h += 50;
   if (settlement.remarks) h += 24;
   return Math.min(Math.max(h, 480), 1500);
 };
@@ -1252,6 +1218,10 @@ const generateLineStockSettlementHTML = (settlement) => {
   }
   const dateStr = new Date(settlement.createdAt).toLocaleDateString('en-GB');
   const timeStr = new Date(settlement.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const prevResolved = resolveDisplayBalance(settlement.previousBalance, settlement.advanceBalanceBefore);
+  const finalResolved = resolveDisplayBalance(settlement.finalBalance, settlement.advanceBalance);
+  const prevLabel = prevResolved.label === 'Current Balance' ? 'Previous Balance' : `Previous ${prevResolved.label}`;
+  const finalColor = finalResolved.label === 'Old Balance' ? 'red' : (finalResolved.label === 'Advance' ? 'green' : '#000');
 
   let soldRows = '';
   (settlement.soldItems || []).forEach((item, index) => {
@@ -1301,13 +1271,8 @@ const generateLineStockSettlementHTML = (settlement) => {
       </head>
       <body>
         <div class="receipt-container">
-          <div class="center bold" style="font-size:16px;">SRI VAISHNAVI JEWELLERS</div>
-          <div class="center">No 370, Big Bazaar Street</div>
-        <div class="center">(Opp - B.G. Naidu Sweets)</div>
-        <div class="center">Phone: 8248134521</div>
-        <div class="divider"></div>
-        <div class="center bold" style="font-size:14px;">${settlement.billStyle === 'PLUS' ? 'PLUS BILL' : settlement.billStyle === 'WASTAGE' ? 'WASTAGE BILL' : 'LINE STOCK SETTLEMENT'}</div>
-        <div class="divider"></div>
+          <div class="center bold" style="font-size:14px;">LINE STOCK BILL</div>
+          <div class="divider"></div>
 
         <div class="row"><div>Settlement:</div><div class="bold">${settlement.settlementNumber}</div></div>
         <div class="row"><div>Issue Txn:</div><div>${settlement.lineStockTransactionId?.transactionNumber || ''}</div></div>
@@ -1350,14 +1315,13 @@ const generateLineStockSettlementHTML = (settlement) => {
 
         <div class="divider"></div>
         
-        <div class="row"><div>Previous Balance:</div><div>${Number(settlement.previousBalance).toFixed(3)}g</div></div>
+        <div class="row"><div>${prevLabel}:</div><div>${prevResolved.value.toFixed(3)}g</div></div>
         <div class="row bold" style="color:red;"><div>Total Sold Deduct:</div><div>-${settlement.soldItems?.reduce((s,i)=>s+i.weight,0).toFixed(3)}g</div></div>
         <div class="row bold" style="color:red;"><div>Returned Deduct:</div><div>-${settlement.returnedItems?.reduce((s,i)=>s+i.weight,0).toFixed(3)}g</div></div>
         <div class="divider"></div>
         <div class="row bold" style="color:green;"><div>Cash Payments:</div><div>Rs.${(settlement.paymentDetails?.cash || 0) + (settlement.paymentDetails?.online || 0) + (settlement.paymentDetails?.card || 0)}</div></div>
         <div class="divider"></div>
-        <div class="row bold"><div>Final Balance:</div><div>${Number(settlement.finalBalance).toFixed(3)}g</div></div>
-        <div class="row"><div>Advance Balance:</div><div>${Number(settlement.advanceBalance).toFixed(3)}g</div></div>
+        <div class="row bold" style="color:${finalColor};"><div>${finalResolved.label}:</div><div>${finalResolved.value.toFixed(3)}g</div></div>
 
         <div class="divider"></div>
         <div class="center" style="font-size:10px; margin-top:5px; font-weight:bold;">
@@ -1415,6 +1379,53 @@ const generateOrderHTML = (order) => {
     ${item.notes ? row('Notes:', escapeHtml(item.notes)) : ''}
   `).join('');
 
+  // Plus/Wastage items always come from the CURRENT Bill Preview state
+  // (order.plusBill/wastageBill), passed in by the caller — never
+  // regenerated or re-derived here.
+  const plusBillItems = order.billStyle === 'PLUS' ? (order.plusBill?.items || []) : [];
+  const wastageBillItems = order.billStyle === 'WASTAGE' ? (order.wastageBill?.items || []) : [];
+  const plusTotalWeight = plusBillItems.reduce((s, i) => s + (Number(i.weight) || 0), 0);
+  const plusTotalCash = plusBillItems.reduce((s, i) => s + (Number(i.cash) || 0), 0);
+  const wastageTotalWeight = wastageBillItems.reduce((s, i) => s + (Number(i.weight) || 0), 0);
+  const wastageTotalCash = wastageBillItems.reduce((s, i) => s + (Number(i.cash) || 0), 0);
+
+  const billItemsHTML = plusBillItems.length ? `
+    <div class="divider"></div>
+    <div class="section-label">PLUS BILL — ISSUED PRODUCTS</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead><tr style="border-bottom:1px dashed #555;"><th style="text-align:left;padding:2px 0;">Item</th><th style="text-align:left;">Wt(g)</th><th style="text-align:left;">Rate</th><th style="text-align:right;">Cash</th></tr></thead>
+      <tbody>${plusBillItems.map(i => `<tr><td style="padding:2px 0;">${escapeHtml(i.itemName || '-')}</td><td>${fmt3(i.weight)}</td><td>${fmtMoney(i.rate)}</td><td style="text-align:right;">${fmtMoney(i.cash)}</td></tr>`).join('')}</tbody>
+    </table>
+    ${row('Total Weight:', fmt3(plusTotalWeight) + 'g', 'bold')}
+    ${row('Total Cash:', '₹' + fmtMoney(plusTotalCash), 'bold')}
+  ` : wastageBillItems.length ? (() => {
+    const wb = order.wastageBill || {};
+    // Previous/Current balance for the Wastage Bill is a derived CASH view
+    // (Balance Rate × the order's real gram balance), already computed once
+    // and read here verbatim — never recalculated, never printed in grams.
+    const wFinalResolved = resolveDisplayBalance(wb.currentOldBalanceCash, wb.currentAdvanceBalanceCash);
+    const wFinalLabel = wFinalResolved.label === 'Advance' ? 'Current Advance Balance' : wFinalResolved.label === 'Old Balance' ? 'Current Old Balance' : 'Current Balance';
+    return `
+    <div class="divider"></div>
+    <div class="section-label">WASTAGE BILL — ISSUED PRODUCTS</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead><tr style="border-bottom:1px dashed #555;"><th style="text-align:left;padding:2px 0;">Item</th><th style="text-align:left;">Wt(g)</th><th style="text-align:left;">Wst%</th><th style="text-align:left;">Rate</th><th style="text-align:right;">Cash</th></tr></thead>
+      <tbody>${wastageBillItems.map(i => `<tr><td style="padding:2px 0;">${escapeHtml(i.itemName || '-')}</td><td>${fmt3(i.weight)}</td><td>${Number(i.wastage || 0).toFixed(1)}</td><td>${fmtMoney(i.rate)}</td><td style="text-align:right;">${fmtMoney(i.cash)}</td></tr>`).join('')}</tbody>
+    </table>
+    ${row('Total Weight:', fmt3(wastageTotalWeight) + 'g', 'bold')}
+    ${row('Total Cash:', '₹' + fmtMoney(wastageTotalCash), 'bold')}
+    <div class="divider"></div>
+    ${row('Previous Balance (g):', fmt3(wb.previousBalanceGram) + 'g')}
+    ${row('Balance Rate:', '₹' + fmtMoney(wb.balanceRate))}
+    ${row('Previous Balance Cash:', '₹' + fmtMoney(wb.previousBalanceCash))}
+    <div class="divider"></div>
+    <div class="section-label">SUMMARY (WASTAGE)</div>
+    ${row('Total Weight:', fmt3(wastageTotalWeight) + 'g')}
+    ${row('Total Cash:', '₹' + fmtMoney(wastageTotalCash))}
+    ${row('Previous Balance Cash:', '₹' + fmtMoney(wb.previousBalanceCash))}
+    ${row(wFinalLabel + ':', '₹' + fmtMoney(wFinalResolved.value), 'bold')}`;
+  })() : '';
+
   return `<!DOCTYPE html><html><head>
     <meta charset="UTF-8" />
     <style>
@@ -1457,6 +1468,7 @@ const generateOrderHTML = (order) => {
     ${row('Advance (Before):', fmt3(advanceBalanceBefore) + 'g')}
     ${row('Advance Given:', '+' + fmt3(advanceTotalGram) + 'g')}
     ${row('New Advance:', fmt3(advanceBalanceAfter) + 'g', 'bold')}
+    ${billItemsHTML}
     ${order.notes ? `<div class="divider"></div><div style="font-size:11px;font-style:italic;">Note: ${escapeHtml(order.notes)}</div>` : ''}
   </body></html>`;
 };
@@ -1464,9 +1476,16 @@ const generateOrderHTML = (order) => {
 const calculateOrderHeight = (order) => {
   const itemCount = order.orderItems?.length || 1;
   const hasPayment = order.paymentMode && order.paymentMode !== 'None';
+  const billItemCount = order.billStyle === 'PLUS'
+    ? (order.plusBill?.items?.length || 0)
+    : order.billStyle === 'WASTAGE'
+    ? (order.wastageBill?.items?.length || 0)
+    : 0;
   let h = 340 + (itemCount * 70);
   if (hasPayment) h += 60;
-  return Math.min(Math.max(h, 400), 1200);
+  if (billItemCount > 0) h += 60 + (billItemCount * 22);
+  if (order.billStyle === 'WASTAGE' && billItemCount > 0) h += 140; // Balance Rate cash-conversion block
+  return Math.min(Math.max(h, 400), 1400);
 };
 
 export const OrderPrintService = {
@@ -1509,6 +1528,117 @@ export const LineStockSettlementPrintService = {
     try {
       const html = generateLineStockSettlementHTML(settlement);
       const height = calculateLineStockSettlementHeight(settlement);
+      await _sharePDF(html, 'Share Settlement Bill', height);
+    } finally {
+      release();
+    }
+  },
+};
+
+// ─── Balance Summary (Old Balance / Advance Balance) Settlement HTML ─────────
+const generateBalanceSettlementHTML = (settlement) => {
+  const isOld = settlement.type === 'OLD';
+  const dateStr = new Date(settlement.createdAt || Date.now()).toLocaleDateString('en-GB');
+  const timeStr = new Date(settlement.createdAt || Date.now()).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const items = settlement.items || [];
+  const customer = settlement.customerId || {};
+
+  const previous = isOld ? safeNumber(settlement.previousOldBalance) : safeNumber(settlement.previousAdvanceBalance);
+  const finalOld = safeNumber(settlement.finalOldBalance);
+  const finalAdvance = safeNumber(settlement.finalAdvanceBalance);
+  const currentIsOld = finalOld > 0;
+
+  const itemRows = items.map(item => `
+    <tr>
+      <td>${item.mode === 'CASH' ? `Rs.${formatMoney(item.cashAmount)} @ Rs.${formatMoney(item.goldRate)}` : 'Gram Entry'}</td>
+      <td style="text-align:right;">${safeNumber(item.gram).toFixed(3)}g</td>
+    </tr>
+  `).join('');
+
+  const styles = `
+    @page { size: 80mm auto; margin: 0; }
+    body { margin: 0; padding: 0; width: 80mm; background: #fff; }
+    .receipt-container { width: 75mm; margin: 0 auto; box-sizing: border-box; font-family: 'Courier New', Courier, monospace; font-size: 12px; font-weight: 600; color: #000 !important; text-align: left; }
+    .center { text-align: center; }
+    .bold { font-weight: bold; }
+    .divider { border-bottom: 1px dashed #000; margin: 5px 0; }
+    .row { display: flex; justify-content: space-between; margin: 2px 0; }
+    table { width: 100%; border-collapse: collapse; margin: 5px 0; font-size: 12px; font-weight: 600; color: #000; }
+    th, td { text-align: left; padding: 2px; vertical-align: top; }
+    th { border-bottom: 1px dashed #000; }
+  `;
+
+  return `
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <style>${styles}</style>
+      </head>
+      <body>
+        <div class="receipt-container">
+          <div class="center bold" style="font-size:16px;">SRI VAISHNAVI JEWELLERS</div>
+          <div class="center">No 370, Big Bazaar Street</div>
+          <div class="center">(Opp - B.G. Naidu Sweets)</div>
+          <div class="center">Phone: 8248134521</div>
+          <div class="divider"></div>
+          <div class="center bold" style="font-size:14px;">${isOld ? 'OLD BALANCE SETTLEMENT' : 'ADVANCE BALANCE SETTLEMENT'}</div>
+          <div class="divider"></div>
+
+          <div class="row"><div>Bill No:</div><div class="bold">${escapeHtml(settlement.billNumber || '')}</div></div>
+          <div class="row"><div>Date:</div><div>${dateStr}</div></div>
+          <div class="row"><div>Time:</div><div>${timeStr}</div></div>
+
+          <div class="divider"></div>
+          <div class="bold">CUSTOMER DETAILS</div>
+          <div class="row"><div>Customer Name:</div><div>${escapeHtml(customer.customerName || 'N/A')}</div></div>
+          <div class="row"><div>Phone:</div><div>${escapeHtml(customer.phoneNumber || 'N/A')}</div></div>
+
+          <div class="divider"></div>
+          <div class="bold">SETTLEMENT ITEMS</div>
+          <table>
+            <thead><tr><th>Detail</th><th style="text-align:right;">Gram</th></tr></thead>
+            <tbody>${itemRows}</tbody>
+          </table>
+          <div class="row bold"><div>Total Settlement Gram:</div><div>${safeNumber(settlement.totalSettlementGram).toFixed(3)}g</div></div>
+
+          <div class="divider"></div>
+          <div class="bold">SUMMARY</div>
+          <div class="row"><div>${isOld ? 'Previous Old Balance:' : 'Previous Advance Balance:'}</div><div>${formatBalanceForCustomer(previous, customer)}</div></div>
+          <div class="row bold" style="color:${currentIsOld ? 'red' : 'green'};"><div>${currentIsOld ? 'Current Old Balance:' : 'Current Advance Balance:'}</div><div>${formatBalanceForCustomer(currentIsOld ? finalOld : finalAdvance, customer)}</div></div>
+
+          <div class="divider"></div>
+          <div class="center" style="margin-top:10px;">Thank You</div>
+          <div class="center bold">Sri Vaishnavi Jewellers</div>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
+const calculateBalanceSettlementHeight = (settlement) => {
+  const itemCount = settlement.items?.length || 0;
+  let h = 320;
+  if (itemCount > 0) h += 30 + (itemCount * 18);
+  return Math.min(Math.max(h, 420), 1200);
+};
+
+export const BalanceSettlementPrintService = {
+  printBill: async (settlement) => {
+    if (!acquire()) throw new Error('A print action is already in progress.');
+    try {
+      const html = generateBalanceSettlementHTML(settlement);
+      const height = calculateBalanceSettlementHeight(settlement);
+      await _printViaPDF(html, height);
+    } finally {
+      release();
+    }
+  },
+
+  shareWhatsApp: async (settlement) => {
+    if (!acquire()) throw new Error('A share action is already in progress.');
+    try {
+      const html = generateBalanceSettlementHTML(settlement);
+      const height = calculateBalanceSettlementHeight(settlement);
       await _sharePDF(html, 'Share Settlement Bill', height);
     } finally {
       release();

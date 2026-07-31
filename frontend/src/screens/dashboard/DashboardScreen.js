@@ -8,6 +8,7 @@ import QuickAccessGrid from '../../components/QuickAccessGrid';
 import RecentTransactionsList from '../../components/RecentTransactionsList';
 import UpcomingRemindersList from '../../components/UpcomingRemindersList';
 import DashboardExpenseCard from '../../components/DashboardExpenseCard';
+import BalanceSummaryCard from '../../components/BalanceSummaryCard';
 import Sidebar from '../../components/Sidebar';
 
 const BG = '#F8F4E8';
@@ -57,6 +58,7 @@ export default function DashboardScreen({ navigation }) {
         <GoldRateCard />
         <QuickAccessGrid navigation={navigation} />
         <DashboardExpenseCard navigation={navigation} />
+        <BalanceSummaryCard navigation={navigation} />
         <UpcomingRemindersList />
         <RecentTransactionsList />
       </ScrollView>

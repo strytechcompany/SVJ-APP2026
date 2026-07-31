@@ -7,6 +7,7 @@ const {
   getOrderById,
   updateOrderStatus,
   updateBillStyle,
+  saveBill,
   deleteOrder,
 } = require('../controllers/orderController');
 
@@ -15,6 +16,7 @@ router.get('/all', protect, getAllOrders);
 router.get('/:id', protect, getOrderById);
 router.put('/:id/status', protect, updateOrderStatus);
 router.put('/:id/bill-style', protect, updateBillStyle);
+router.put('/:id/save-bill', protect, saveBill);
 router.delete('/:id', protect, deleteOrder);
 
 module.exports = router;

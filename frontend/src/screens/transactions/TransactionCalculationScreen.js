@@ -2226,21 +2226,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           )}
         </View>
 
-        {/* Wastage Remainder Table — optional final manual adjustment on top of Current Balance */}
+        {/* Wastage Remainder Table — Current Balance + optional Reminder Date */}
         {isWastage && (
         <View style={[styles.card, {zIndex: -6}]}>
           <Text style={styles.cardTitle}>Remainder Table</Text>
-
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>{preRemainderOldBalance > 0 ? 'Current Old Balance' : 'Current Advance Balance'}</Text>
-              <Text style={[styles.calcValue, {color: preRemainderOldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>₹{(preRemainderOldBalance > 0 ? preRemainderOldBalance : preRemainderAdvanceBalance).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Subtraction Amount</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={wastageSubtractionAmount} onChangeText={setWastageSubtractionAmount} placeholder="0" />
-            </View>
-          </View>
 
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
@@ -2283,10 +2272,10 @@ export default function TransactionCalculationScreen({ navigation, route }) {
               <Text style={styles.inputLabel}>Outstanding</Text>
               <Text style={styles.calcValue}>{plusOutstanding.toFixed(3)} g</Text>
             </View>
-            <View style={styles.gridItem}>
+            {/* <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Reminder Pure</Text>
               <TextInput style={styles.input} keyboardType="numeric" value={plusReminderPureInput} onChangeText={setPlusReminderPureInput} placeholder="0" />
-            </View>
+            </View> */}
           </View>
 
           <View style={styles.gridRow}>

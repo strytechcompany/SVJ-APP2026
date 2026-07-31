@@ -166,6 +166,8 @@ export const transactionAPI = {
   create: (data) => api.post('/transactions/create', data),
   getAll: (params) => api.get('/transactions/all', { params }),
   getRecent: () => api.get('/transactions/recent'),
+  clearAllRecent: () => api.patch('/transactions/recent/clear-all'),
+  clearRecent: (id) => api.patch(`/transactions/recent/${id}/clear`),
   getNextBillNumber: (category) => api.get('/transactions/next-bill-number', { params: { category } }),
   getUpcomingReminders: () => api.get('/transactions/reminders/upcoming'),
   getById: (id) => api.get(`/transactions/${id}`),
@@ -204,6 +206,8 @@ export const lineStockAPI = {
   updateSettlementBillStyle: (id, data) => api.put(`/linestock/settlement/${id}/bill-style`, data),
   saveSettlementPlusBill: (id, plusBill) => api.put(`/linestock/settlement/${id}/plus-bill`, { plusBill }),
   saveSettlementWastageBill: (id, wastageBill) => api.put(`/linestock/settlement/${id}/wastage-bill`, { wastageBill }),
+  getSettlementsByCustomer: (customerId) => api.get(`/linestock/settlement/customer/${customerId}`),
+  getSettlementByTransactionId: (lineStockTransactionId) => api.get(`/linestock/settlement/by-transaction/${lineStockTransactionId}`),
 };
 
 export const orderAPI = {
@@ -212,7 +216,19 @@ export const orderAPI = {
   getById: (id) => api.get(`/orders/${id}`),
   updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
   updateBillStyle: (id, data) => api.put(`/orders/${id}/bill-style`, data),
+  saveBill: (id, data) => api.put(`/orders/${id}/save-bill`, data),
   remove: (id) => api.delete(`/orders/${id}`),
+};
+
+export const balanceSettlementAPI = {
+  getOldBalanceCustomers: () => api.get('/balance-settlement/old-balance/customers'),
+  getAdvanceBalanceCustomers: () => api.get('/balance-settlement/advance-balance/customers'),
+  settle: (data) => api.post('/balance-settlement/settle', data),
+  getHistory: (type) => api.get(`/balance-settlement/history/${type}`),
+  getSettlementsByCustomer: (customerId, type) => api.get(`/balance-settlement/customer/${customerId}`, { params: type ? { type } : {} }),
+  getSettlementById: (id) => api.get(`/balance-settlement/${id}`),
+  updateSettlement: (id, data) => api.put(`/balance-settlement/${id}`, data),
+  deleteSettlement: (id) => api.delete(`/balance-settlement/${id}`),
 };
 
 export default api;

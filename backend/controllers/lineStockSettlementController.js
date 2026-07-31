@@ -4,6 +4,7 @@ const Stock = require('../models/Stock');
 const Customer = require('../models/Customer');
 const Transaction = require('../models/Transaction');
 const cashLedgerController = require('./cashLedgerController');
+const { computeWastageCashBalance } = require('../utils/wastageCashBalance');
 
 exports.createSettlement = async (req, res) => {
   try {
@@ -14,7 +15,9 @@ exports.createSettlement = async (req, res) => {
       returnedItems,
       paymentDetails,
       remarks,
-      billStyle
+      billStyle,
+      plusBill,
+      wastageBill,
     } = req.body;
 
     const customer = await Customer.findById(customerId);
@@ -28,9 +31,7 @@ exports.createSettlement = async (req, res) => {
     }
 
     // Process Returned Items (Restore Stock)
-    let totalReturnedWeight = 0;
     for (const item of returnedItems) {
-      totalReturnedWeight += item.weight;
       const stockItem = await Stock.findById(item.stockId);
       if (stockItem) {
         stockItem.quantity += item.count;
@@ -44,24 +45,70 @@ exports.createSettlement = async (req, res) => {
       totalSoldWeight += item.weight;
     }
 
-    // Calculate Balances
-    const previousBalance = customer.oldBalance;
-    // As per user request: deduct both returned and sold weights.
-    let finalBalance = previousBalance - totalSoldWeight - totalReturnedWeight;
-
-    // Payments are not involved in calculation anymore
-    let newAdvance = customer.advance;
-    if (finalBalance < 0) {
-      newAdvance += Math.abs(finalBalance);
-      finalBalance = 0;
+    // Two-phase balance: Issue's "Save Bill" already provisionally committed
+    // Previous + FULL Issued Weight (assuming everything would be sold).
+    // Settlement now CORRECTS that using the real Sold/Return outcome —
+    // recomputed from the ORIGINAL pre-issue snapshot frozen on the
+    // transaction at Issue time (oldBalanceBefore/advanceBalanceBefore), not
+    // from the customer's current (already-incremented) balance, otherwise
+    // the issued weight would be double-counted. A fully-Returned item
+    // contributes nothing (totalSoldWeight excludes it), so the balance ends
+    // up back at exactly its original pre-issue value — a true no-op. An
+    // existing Advance Balance is drawn down by what's actually sold,
+    // converting to Old Balance only once fully consumed.
+    const previousBalance = lsTransaction.oldBalanceBefore || 0;
+    const previousAdvance = lsTransaction.advanceBalanceBefore || 0;
+    let finalBalance, newAdvance;
+    if (previousAdvance > 0 && previousBalance === 0) {
+      const net = previousAdvance - totalSoldWeight;
+      if (net < 0) { finalBalance = Math.abs(net); newAdvance = 0; }
+      else { finalBalance = 0; newAdvance = net; }
+    } else {
+      const net = totalSoldWeight + previousBalance;
+      if (net < 0) { finalBalance = 0; newAdvance = Math.abs(net); }
+      else { finalBalance = net; newAdvance = 0; }
     }
+    finalBalance = parseFloat(finalBalance.toFixed(3));
+    newAdvance = parseFloat(newAdvance.toFixed(3));
 
-    // Update Customer
     customer.oldBalance = finalBalance;
     customer.advance = newAdvance;
     await customer.save();
 
-    const status = finalBalance === 0 ? 'SETTLED' : 'ACTIVE';
+    const status = 'SETTLED';
+
+    // Wastage Bill balance cash-conversion (first Save Bill from preview
+    // mode) — same recompute as saveWastageBill, using the real pre-issue
+    // snapshot (previousBalance/previousAdvance) as the source of truth.
+    // Cash is always recomputed server-side, never trusted from the client.
+    let sanitizedWastageBill = wastageBill;
+    if (billStyle === 'WASTAGE' && wastageBill) {
+      const issuedItems = (wastageBill.issuedItems || []).map((it) => {
+        const weight = parseFloat(it.weight) || 0;
+        const rate = parseFloat(it.rate) || 0;
+        return {
+          itemName: it.itemName || '',
+          weight,
+          wastage: parseFloat(it.wastage) || 0,
+          rate,
+          cash: parseFloat((weight * rate).toFixed(2)),
+        };
+      });
+      const itemCash = parseFloat(issuedItems.reduce((s, i) => s + i.cash, 0).toFixed(2));
+      const balanceRate = parseFloat(wastageBill.balanceRate) || 0;
+      const { previousGram, previousCash, oldCash, advanceCash } = computeWastageCashBalance(
+        previousBalance, previousAdvance, balanceRate, itemCash
+      );
+      sanitizedWastageBill = {
+        issuedItems,
+        receivedItems: [],
+        balanceRate,
+        previousBalanceGram: previousGram,
+        previousBalanceCash: previousCash,
+        currentOldBalanceCash: oldCash,
+        currentAdvanceBalanceCash: advanceCash,
+      };
+    }
 
     // Reuse an existing draft settlement (built up via incremental Sold Product
     // saves) instead of creating a second document for the same transaction.
@@ -71,12 +118,15 @@ exports.createSettlement = async (req, res) => {
       settlement.returnedItems = returnedItems;
       settlement.paymentDetails = paymentDetails;
       settlement.previousBalance = previousBalance;
+      settlement.advanceBalanceBefore = previousAdvance;
       settlement.finalBalance = finalBalance;
       settlement.advanceBalance = newAdvance;
       settlement.remarks = remarks;
       settlement.status = status;
       settlement.isDraft = false;
       if (billStyle !== undefined) settlement.billStyle = billStyle;
+      if (plusBill !== undefined) settlement.plusBill = plusBill;
+      if (sanitizedWastageBill !== undefined) settlement.wastageBill = sanitizedWastageBill;
       settlement.settledBy = req.user?.name || req.user?.email || 'System';
       await settlement.save();
     } else {
@@ -87,12 +137,15 @@ exports.createSettlement = async (req, res) => {
         returnedItems,
         paymentDetails,
         previousBalance,
+        advanceBalanceBefore: previousAdvance,
         finalBalance,
         advanceBalance: newAdvance,
         remarks,
         status,
         isDraft: false,
         billStyle,
+        plusBill,
+        wastageBill: sanitizedWastageBill,
         settledBy: req.user?.name || req.user?.email || 'System',
         createdBy: req.user._id,
       });
@@ -270,8 +323,9 @@ exports.updateBillStyle = async (req, res) => {
 
 // ─── Save the PLUS Bill structure ─────────────────────────────────────────────
 // A self-contained, gram-based bill view built on top of the real settlement.
-// Purely additive — never touches soldItems, returnedItems, finalBalance,
-// advanceBalance, or the real customer balance (already applied by createSettlement).
+// Purely additive — never itself touches soldItems, returnedItems,
+// finalBalance, advanceBalance, or the real customer balance; the real
+// balance was already corrected by createSettlement above.
 exports.savePlusBill = async (req, res) => {
   try {
     const { plusBill } = req.body;
@@ -295,25 +349,94 @@ exports.savePlusBill = async (req, res) => {
 
 // ─── Save the WASTAGE Bill structure ──────────────────────────────────────────
 // A self-contained, cash-based bill view (Weight × manually-entered Rate =
-// Cash). Same additive guarantee as savePlusBill.
+// Cash for items; Balance Rate cash-conversion for the balance section).
+// Same additive guarantee as savePlusBill — never touches the real gram
+// balance. Cash is always recomputed server-side, never trusted from the
+// client.
 exports.saveWastageBill = async (req, res) => {
   try {
     const { wastageBill } = req.body;
     if (!wastageBill) {
       return res.status(400).json({ success: false, message: 'wastageBill is required' });
     }
-    const settlement = await LineStockSettlement.findByIdAndUpdate(
-      req.params.id,
-      { $set: { billStyle: 'WASTAGE', wastageBill } },
-      { new: true }
-    ).populate('customerId').populate('lineStockTransactionId');
+    const settlement = await LineStockSettlement.findById(req.params.id);
     if (!settlement) {
       return res.status(404).json({ success: false, message: 'Settlement not found' });
     }
+
+    const issuedItems = (wastageBill.issuedItems || []).map((it) => {
+      const weight = parseFloat(it.weight) || 0;
+      const rate = parseFloat(it.rate) || 0;
+      return {
+        itemName: it.itemName || '',
+        weight,
+        wastage: parseFloat(it.wastage) || 0,
+        rate,
+        cash: parseFloat((weight * rate).toFixed(2)),
+      };
+    });
+    const itemCash = parseFloat(issuedItems.reduce((s, i) => s + i.cash, 0).toFixed(2));
+
+    const balanceRate = parseFloat(wastageBill.balanceRate) || 0;
+    const previousOldGram = settlement.previousBalance || 0;
+    const previousAdvanceGram = settlement.advanceBalanceBefore || 0;
+    const { previousGram, previousCash, oldCash, advanceCash } = computeWastageCashBalance(
+      previousOldGram, previousAdvanceGram, balanceRate, itemCash
+    );
+
+    settlement.billStyle = 'WASTAGE';
+    settlement.wastageBill = {
+      issuedItems,
+      receivedItems: [],
+      balanceRate,
+      previousBalanceGram: previousGram,
+      previousBalanceCash: previousCash,
+      currentOldBalanceCash: oldCash,
+      currentAdvanceBalanceCash: advanceCash,
+    };
+    await settlement.save();
+    await settlement.populate('customerId');
+    await settlement.populate('lineStockTransactionId');
+
     res.json({ success: true, data: settlement });
   } catch (error) {
     console.error('saveWastageBill error:', error);
     res.status(500).json({ success: false, message: 'Server error saving wastage bill' });
+  }
+};
+
+// ─── Get all Settlements for a Customer (newest first) ────────────────────────
+// Used by CustomerDetailScreen.js's Bill History (Line Stock Bills category) to
+// show settlement bills alongside Line Stock issue bills.
+exports.getSettlementsByCustomer = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const settlements = await LineStockSettlement.find({ customerId, isDraft: { $ne: true } })
+      .populate('lineStockTransactionId')
+      .sort({ createdAt: -1 });
+    res.json({ success: true, data: settlements });
+  } catch (error) {
+    console.error('getSettlementsByCustomer error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching customer settlements' });
+  }
+};
+
+// ─── Get the Settlement for a given Line Stock Transaction ────────────────────
+// Used by the Line Stock Recent Transactions (Dashboard) list to jump straight
+// to a settled transaction's settlement bill for editing.
+exports.getSettlementByTransactionId = async (req, res) => {
+  try {
+    const { lineStockTransactionId } = req.params;
+    const settlement = await LineStockSettlement.findOne({ lineStockTransactionId, isDraft: { $ne: true } })
+      .populate('customerId')
+      .populate('lineStockTransactionId');
+    if (!settlement) {
+      return res.status(404).json({ success: false, message: 'Settlement not found for this transaction' });
+    }
+    res.json({ success: true, data: settlement });
+  } catch (error) {
+    console.error('getSettlementByTransactionId error:', error);
+    res.status(500).json({ success: false, message: 'Server error fetching settlement' });
   }
 };
 

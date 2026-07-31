@@ -30,16 +30,30 @@ const PlusBillSchema = new mongoose.Schema({
 const WastageBillItemSchema = new mongoose.Schema({
   itemName: String,
   weight: Number,
+  wastage: Number,
   rate: Number,
   cash: Number,
 });
 const SettlementWastageBillSchema = new mongoose.Schema({
   issuedItems: [WastageBillItemSchema],
   receivedItems: [WastageBillItemSchema],
+  // Legacy gram-based fields — retained for backward compatibility with bills
+  // saved before the Balance Rate cash-conversion feature below; no longer
+  // written to for new saves.
   oldBalanceBefore: { type: Number, default: 0 },
   advanceBalanceBefore: { type: Number, default: 0 },
   oldBalanceAfter: { type: Number, default: 0 },
   advanceBalanceAfter: { type: Number, default: 0 },
+  // Cash-conversion fields (Wastage Bill only) — the ONE calculation for this
+  // bill's balance section. The real settlement balance stays gram-based
+  // (previousBalance/advanceBalanceBefore/finalBalance/advanceBalance on the
+  // parent LineStockSettlement) and is untouched by any of this; these fields
+  // are purely a derived cash VIEW for the Wastage Bill's own preview/print.
+  balanceRate: { type: Number, default: 0 },
+  previousBalanceGram: { type: Number, default: 0 },
+  previousBalanceCash: { type: Number, default: 0 },
+  currentOldBalanceCash: { type: Number, default: 0 },
+  currentAdvanceBalanceCash: { type: Number, default: 0 },
 });
 
 const LineStockSettlementSchema = new mongoose.Schema(
@@ -94,7 +108,13 @@ const LineStockSettlementSchema = new mongoose.Schema(
       gold: { type: Number, default: 0 },
       receivedGram: { type: Number, default: 0 },
     },
+    // previousBalance/advanceBalanceBefore + finalBalance/advanceBalance are the
+    // ONE canonical balance calculation for this settlement (computed exactly
+    // once in createSettlement). Every screen — Settlement Summary, Bill
+    // Preview, Recent Transactions, Customer List, Reports — must read these
+    // saved values rather than recomputing them.
     previousBalance: { type: Number, default: 0 },
+    advanceBalanceBefore: { type: Number, default: 0 },
     finalBalance: { type: Number, default: 0 },
     advanceBalance: { type: Number, default: 0 },
     remarks: { type: String, default: '' },

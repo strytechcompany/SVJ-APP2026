@@ -79,6 +79,12 @@ const LineStockTransactionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Old/Advance Balance Before + After: a live PROJECTION right after Issue
+    // (before a Bill Style is saved), then the REAL committed values once a
+    // PLUS-style Save Bill applies them to the customer (see balanceApplied
+    // below). Settlement (Sold/Return) never touches balance — it's a
+    // stock/paperwork step only; Issue's Save Bill is the sole place the
+    // customer's real balance changes.
     oldBalanceBefore: {
       type: Number,
       default: 0,
@@ -86,6 +92,22 @@ const LineStockTransactionSchema = new mongoose.Schema(
     oldBalanceAfter: {
       type: Number,
       default: 0,
+    },
+    advanceBalanceBefore: {
+      type: Number,
+      default: 0,
+    },
+    advanceBalanceAfter: {
+      type: Number,
+      default: 0,
+    },
+    // True once a PLUS-style Save Bill has actually committed
+    // oldBalanceAfter/advanceBalanceAfter to the real customer document —
+    // guards against re-applying the same addition twice if Save Bill (or a
+    // notes-only re-save) is clicked again.
+    balanceApplied: {
+      type: Boolean,
+      default: false,
     },
     description: {
       type: String,

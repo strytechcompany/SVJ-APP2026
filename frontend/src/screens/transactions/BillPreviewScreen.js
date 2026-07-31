@@ -201,6 +201,23 @@ export default function BillPreviewScreen({ navigation, route }) {
     });
   };
 
+  // Wastage Issued Products — Weight/Wastage/Rate are manually editable here;
+  // Cash always recomputes from them. Existing formula unchanged: WW (value1)
+  // = Weight + Wastage, Cash (amount) = WW × Rate.
+  const updateWastageIssueItem = (idx, field, rawValue) => {
+    setTransaction(prev => {
+      const items = [...(prev.issueItems || [])];
+      const current = { ...items[idx], [field]: rawValue };
+      const weight = parseFloat(current.weight) || 0;
+      const wastage = parseFloat(current.wastage) || 0;
+      const rate = parseFloat(current.rate) || 0;
+      current.value1 = safeNumber(weight + wastage);
+      current.amount = safeNumber(current.value1 * rate);
+      items[idx] = current;
+      return { ...prev, issueItems: items };
+    });
+  };
+
   // Wastage: Collect Cash / Add to Balance only choose the payment option
   // (below). The bill is saved to MongoDB only when this is called, which
   // happens exclusively from the separate "Save Bill" button.
@@ -375,24 +392,41 @@ export default function BillPreviewScreen({ navigation, route }) {
               {isWastage ? (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={[styles.th, {flex: 2.5}]}>Item</Text>
-                    <Text style={[styles.th, {flex: 1.2}]}>WW(g)</Text>
-                    <Text style={[styles.th, {flex: 1.2}]}>Rate(₹)</Text>
-                    <Text style={[styles.th, {flex: 1.5, textAlign: 'right'}]}>Cash(₹)</Text>
+                    <Text style={[styles.th, {flex: 2}]}>Item Name</Text>
+                    <Text style={[styles.th, {flex: 1.1}]}>Wt(g)</Text>
+                    <Text style={[styles.th, {flex: 1}]}>Wst(%)</Text>
+                    <Text style={[styles.th, {flex: 1.1}]}>Rate(₹)</Text>
+                    <Text style={[styles.th, {flex: 1.4, textAlign: 'right'}]}>Cash(₹)</Text>
                   </View>
                   {issueItems.map((item, index) => (
                     <View key={item._id || index} style={{borderBottomWidth: 1, borderColor: '#EEE', paddingVertical: 3}}>
                       <View style={styles.tr}>
-                        <Text style={[styles.td, {flex: 2.5}]}>{item.itemName || item.itemNumber || '-'}</Text>
-                        <Text style={[styles.td, {flex: 1.2}]}>{Number(item.value1 || 0).toFixed(3)}</Text>
-                        <Text style={[styles.td, {flex: 1.2}]}>{safeNumber(item.rate).toFixed(2)}</Text>
-                        <Text style={[styles.td, {flex: 1.5, textAlign: 'right'}]}>{safeNumber(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
+                        <Text style={[styles.td, {flex: 2}]}>{item.itemName || item.itemNumber || '-'}</Text>
+                        <TextInput
+                          style={[styles.tdInput, {flex: 1.1}]}
+                          keyboardType="numeric"
+                          value={String(item.weight ?? '')}
+                          onChangeText={(v) => updateWastageIssueItem(index, 'weight', v)}
+                        />
+                        <TextInput
+                          style={[styles.tdInput, {flex: 1}]}
+                          keyboardType="numeric"
+                          value={String(item.wastage ?? '')}
+                          onChangeText={(v) => updateWastageIssueItem(index, 'wastage', v)}
+                        />
+                        <TextInput
+                          style={[styles.tdInput, {flex: 1.1}]}
+                          keyboardType="numeric"
+                          value={String(item.rate ?? '')}
+                          onChangeText={(v) => updateWastageIssueItem(index, 'rate', v)}
+                        />
+                        <Text style={[styles.td, {flex: 1.4, textAlign: 'right'}]}>{safeNumber(item.amount).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text>
                       </View>
                     </View>
                   ))}
                   <Text style={styles.dividerDotted}>................................</Text>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total WW:</Text><Text style={styles.monoBold}>{issueItems.reduce((s,i)=>s+(i.value1||0),0).toFixed(3)}g</Text></View>
-                  <View style={styles.row}><Text style={styles.monoBold}>Total Cash:</Text><Text style={styles.monoBold}>₹{safeIssueTotalAmount.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Weight:</Text><Text style={styles.monoBold}>{issueItems.reduce((s,i)=>s+(parseFloat(i.weight)||0),0).toFixed(3)}g</Text></View>
+                  <View style={styles.row}><Text style={styles.monoBold}>Total Cash:</Text><Text style={styles.monoBold}>₹{issueItems.reduce((s,i)=>s+safeNumber(i.amount),0).toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
                 </>
               ) : isB2DBill ? (
                 <>
@@ -640,7 +674,6 @@ export default function BillPreviewScreen({ navigation, route }) {
             <>
               <Text style={styles.divider}>--------------------------------</Text>
               <Text style={styles.sectionTitle}>REMAINDER TABLE</Text>
-              <View style={styles.row}><Text style={styles.mono}>Subtraction Amount:</Text><Text style={styles.mono}>₹{wastageSubtractionVal.toLocaleString('en-IN', {maximumFractionDigits:2})}</Text></View>
               <View style={styles.row}>
                 <Text style={[styles.monoBold, {color: wastageRemainderResult.oldBalance > 0 ? '#D32F2F' : '#2E7D32'}]}>
                   {wastageRemainderResult.oldBalance > 0 ? 'Current Old Balance:' : 'Current Advance Balance:'}
@@ -1189,6 +1222,7 @@ const styles = StyleSheet.create({
   th: { fontWeight: 'bold', fontSize: 11, color: '#000' },
   tr: { flexDirection: 'row', marginVertical: 2 },
   td: { fontFamily: 'monospace', fontSize: 10, color: '#000' },
+  tdInput: { fontFamily: 'monospace', fontSize: 10, color: '#000', borderWidth: 1, borderColor: '#CCC', borderRadius: 3, paddingHorizontal: 3, paddingVertical: 1 },
 
   tamilInput: { textAlign: 'center', fontSize: 11, color: '#000', fontStyle: 'italic', borderWidth: 1, borderStyle: 'dashed', borderColor: '#ccc', padding: 8, borderRadius: 4 },
   footerMsg: { textAlign: 'center', fontFamily: 'monospace', fontSize: 11, color: '#000', marginTop: 10 },

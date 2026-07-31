@@ -6,8 +6,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { lineStockAPI, customerAPI } from '../../services/api';
-import { LineStockSettlementPrintService } from '../../services/PrintService';
 import { useDashboard } from '../../context/DashboardContext';
+import { resolveDisplayBalance } from '../../utils/balanceDisplay';
 
 const GOLD = '#D4AF37';
 const DARK_BROWN = '#4B2E05';
@@ -20,8 +20,6 @@ export default function LineStockSettlementScreen({ route, navigation }) {
   const topPad = insets.top || (Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 44);
 
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [savingAndPrinting, setSavingAndPrinting] = useState(false);
   const [savingItemId, setSavingItemId] = useState(null);
 
   const { goldRate: dashGoldRate } = useDashboard();
@@ -119,15 +117,7 @@ export default function LineStockSettlementScreen({ route, navigation }) {
     setPendingItems(prev => [...prev, item]);
   };
 
-  const updateSoldAmount = (itemId, amount) => {
-    setSoldItems(prev => prev.map(p => p._id === itemId ? { ...p, amount } : p));
-  };
-
   const handleSaveSoldItem = async (item) => {
-    if (!item.amount || parseFloat(item.amount) <= 0) {
-      Alert.alert('Error', 'Please enter a valid sold amount.');
-      return;
-    }
     setSavingItemId(item._id);
     try {
       const res = await lineStockAPI.saveSoldItem({
@@ -141,7 +131,7 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           weight: item.weight,
           purity: item.purity,
           count: item.count,
-          amount: parseFloat(item.amount) || 0,
+          amount: 0,
         },
       });
       if (res.data.success) {
@@ -154,17 +144,12 @@ export default function LineStockSettlementScreen({ route, navigation }) {
     }
   };
 
-  const handleEditSoldItem = (item) => {
-    setSoldItems(prev => prev.map(p => p._id === item._id ? { ...p, saved: false } : p));
-  };
-
   // Auto-Calculations
   const totalIssuedCount = transaction?.totalItems || 0;
   const totalIssuedWeight = transaction?.totalGram || 0;
 
   const totalSoldItems = soldItems.reduce((sum, item) => sum + item.count, 0);
   const totalSoldWeight = soldItems.reduce((sum, item) => sum + item.weight, 0);
-  const totalSoldAmount = soldItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
 
   const totalReturnedItems = returnedItems.reduce((sum, item) => sum + item.count, 0);
   const totalReturnedWeight = returnedItems.reduce((sum, item) => sum + item.weight, 0);
@@ -173,46 +158,61 @@ export default function LineStockSettlementScreen({ route, navigation }) {
   const goldValue = (parseFloat(goldPayment) || 0) * goldRatePerGram;
   const totalReceived = cashValue + goldValue;
 
-  const previousBalance = customer ? customer.oldBalance : 0;
-  const currentAdvance = customer ? customer.advance : 0;
+  // The customer's TRUE current balance right now (already reflects Issue's
+  // provisional "Previous + Full Issued Weight" commit) — shown at the top of
+  // this screen so the admin sees what's really in MongoDB today.
+  const liveOldBalance = customer ? customer.oldBalance : 0;
+  const liveAdvanceBalance = customer ? customer.advance : 0;
 
-  // As per user request: deduct BOTH sold weight and returned weight from the balance.
-  let finalBalance = previousBalance - totalSoldWeight - totalReturnedWeight;
-  let newAdvance = currentAdvance;
+  // The ORIGINAL pre-issue balance, frozen on the transaction at Issue time —
+  // deliberately NOT the live value above. Settlement corrects from this
+  // original snapshot using the real Sold/Return outcome, so it must never
+  // compound on top of what Issue already added.
+  const previousBalance = transaction ? (transaction.oldBalanceBefore || 0) : 0;
+  const currentAdvance = transaction ? (transaction.advanceBalanceBefore || 0) : 0;
 
-  if (finalBalance < 0) {
-    newAdvance += Math.abs(finalBalance);
-    finalBalance = 0;
+  // A Sold item draws down (or, if none, leaves untouched) the balance
+  // recorded before this issue ever happened; a Returned item contributes
+  // nothing (true no-op). An existing Advance Balance is drawn down first,
+  // converting to Old Balance only once fully consumed by what's sold.
+  let finalBalance, newAdvance;
+  if (currentAdvance > 0 && previousBalance === 0) {
+    const net = currentAdvance - totalSoldWeight;
+    if (net < 0) { finalBalance = Math.abs(net); newAdvance = 0; }
+    else { finalBalance = 0; newAdvance = net; }
+  } else {
+    const net = totalSoldWeight + previousBalance;
+    if (net < 0) { finalBalance = 0; newAdvance = Math.abs(net); }
+    else { finalBalance = net; newAdvance = 0; }
   }
 
-  // Submission
-  const handleSettle = async (action = 'save') => {
+  // Single-balance display rule (never show Old Balance and Advance together).
+  const prevResolved = resolveDisplayBalance(previousBalance, currentAdvance);
+  const finalResolved = resolveDisplayBalance(finalBalance, newAdvance);
+
+  // Cancel — discard this settlement in progress and go back. Nothing has
+  // been saved yet (Sold Products saved via the per-item Save icon are the
+  // only thing already persisted, as an incremental draft).
+  const handleCancel = () => {
+    navigation.goBack();
+  };
+
+  // Preview — does NOT save anything. Hands the currently-entered items,
+  // payments, remarks, and (mandatory) Bill Type to BillPreviewScreen as an
+  // unsaved preview; the actual settlement is only created in MongoDB when
+  // the admin taps "Save Bill" there.
+  const handlePreview = () => {
     if (!billStyle) {
       Alert.alert('Bill Type Required', 'Please select a Bill Type.');
       return;
     }
-    if (pendingItems.length > 0) {
-      Alert.alert(
-        'Partial Settlement',
-        'You have items that are not marked as Sold or Returned. Are you sure you want to proceed?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Proceed', onPress: () => submitSettlement(action) }
-        ]
-      );
-    } else {
-      submitSettlement(action);
-    }
-  };
 
-  const submitSettlement = async (action) => {
-    if (action === 'print') setSavingAndPrinting(true);
-    else setSaving(true);
-    
-    try {
-      const payload = {
+    const goToPreview = () => {
+      const previewPayload = {
         lineStockTransactionId: transactionId,
         customerId: customer._id,
+        customerName: customer.customerName,
+        customerPhone: customer.phoneNumber,
         soldItems: soldItems.map(s => ({
           stockId: s.stockId,
           itemNumber: s.itemNumber,
@@ -221,7 +221,7 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           weight: s.weight,
           purity: s.purity,
           count: s.count,
-          amount: parseFloat(s.amount) || 0
+          amount: 0
         })),
         returnedItems: returnedItems.map(r => ({
           stockId: r.stockId,
@@ -241,25 +241,26 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           receivedGram: 0
         },
         remarks,
-        billStyle
+        billStyle,
+        previousBalance,
+        advanceBalanceBefore: currentAdvance,
+        finalBalance,
+        advanceBalance: newAdvance,
       };
+      navigation.navigate('LineStockSettlementBillPreview', { previewPayload });
+    };
 
-      const res = await lineStockAPI.settleStock(payload);
-      if (res.data.success) {
-        if (action === 'print') {
-          await LineStockSettlementPrintService.printBill({ ...res.data.data, billStyle });
-          navigation.navigate('LineStockDashboard');
-        } else {
-          Alert.alert('Settled', 'Settlement completed successfully!', [
-            { text: 'View Bill', onPress: () => navigation.navigate('LineStockSettlementBillPreview', { settlementId: res.data.data._id }) }
-          ]);
-        }
-      }
-    } catch (e) {
-      Alert.alert('Error', e.response?.data?.message || 'Failed to settle stock');
-    } finally {
-      setSaving(false);
-      setSavingAndPrinting(false);
+    if (pendingItems.length > 0) {
+      Alert.alert(
+        'Partial Settlement',
+        'You have items that are not marked as Sold or Returned. Are you sure you want to proceed?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Proceed', onPress: goToPreview }
+        ]
+      );
+    } else {
+      goToPreview();
     }
   };
 
@@ -296,8 +297,8 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           <View style={styles.row}><Text style={styles.label}>Stocker Name:</Text><Text style={styles.value}>{customer?.customerName}</Text></View>
           <View style={styles.row}><Text style={styles.label}>Phone:</Text><Text style={styles.value}>{customer?.phoneNumber}</Text></View>
           <View style={styles.divider} />
-          <View style={styles.row}><Text style={styles.label}>Current Old Balance:</Text><Text style={styles.value}>{Number(previousBalance).toFixed(3)}g</Text></View>
-          <View style={styles.row}><Text style={styles.label}>Current Advance:</Text><Text style={styles.value}>{Number(currentAdvance).toFixed(3)}g</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Current Old Balance:</Text><Text style={styles.value}>{Number(liveOldBalance).toFixed(3)}g</Text></View>
+          <View style={styles.row}><Text style={styles.label}>Current Advance:</Text><Text style={styles.value}>{Number(liveAdvanceBalance).toFixed(3)}g</Text></View>
         </View>
 
         {/* Issued Products List */}
@@ -338,39 +339,23 @@ export default function LineStockSettlementScreen({ route, navigation }) {
                   <Text style={styles.itemSub}>{item.weight.toFixed(3)}g | {item.purity}</Text>
                 </View>
                 {item.saved ? (
-                  <>
-                    <Text style={[styles.amountInput, { paddingTop: 8 }]}>₹{(parseFloat(item.amount) || 0).toFixed(2)}</Text>
-                    <TouchableOpacity style={{ marginLeft: 8 }} onPress={() => handleEditSoldItem(item)}>
-                      <MaterialCommunityIcons name="pencil-outline" size={20} color={DARK_BROWN} />
-                    </TouchableOpacity>
-                  </>
+                  <MaterialCommunityIcons name="check-circle" size={20} color="#27AE60" />
                 ) : (
-                  <>
-                    <TextInput
-                      style={styles.amountInput}
-                      placeholder="₹ Amount"
-                      keyboardType="numeric"
-                      value={item.amount}
-                      onChangeText={(val) => updateSoldAmount(item._id, val)}
-                    />
-                    <TouchableOpacity
-                      style={{ marginLeft: 8 }}
-                      onPress={() => handleSaveSoldItem(item)}
-                      disabled={savingItemId === item._id}
-                    >
-                      {savingItemId === item._id
-                        ? <ActivityIndicator size="small" color="#27AE60" />
-                        : <MaterialCommunityIcons name="content-save-outline" size={20} color="#27AE60" />}
-                    </TouchableOpacity>
-                  </>
+                  <TouchableOpacity
+                    style={{ marginLeft: 8 }}
+                    onPress={() => handleSaveSoldItem(item)}
+                    disabled={savingItemId === item._id}
+                  >
+                    {savingItemId === item._id
+                      ? <ActivityIndicator size="small" color="#27AE60" />
+                      : <MaterialCommunityIcons name="content-save-outline" size={20} color="#27AE60" />}
+                  </TouchableOpacity>
                 )}
                 <TouchableOpacity style={{ marginLeft: 8 }} onPress={() => handleRevert(item, 'sold')}>
                   <MaterialCommunityIcons name="undo" size={20} color="#E74C3C" />
                 </TouchableOpacity>
               </View>
             ))}
-            <View style={styles.divider} />
-            <View style={styles.row}><Text style={styles.label}>Total Sold Amount:</Text><Text style={[styles.value, { color: '#27AE60' }]}>₹{totalSoldAmount.toFixed(2)}</Text></View>
           </View>
         )}
 
@@ -451,37 +436,36 @@ export default function LineStockSettlementScreen({ route, navigation }) {
           
           <View style={styles.divider} />
           
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Previous Balance</Text><Text style={styles.summaryValue}>{previousBalance.toFixed(3)}g</Text></View>
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Sold Weight Deduction</Text><Text style={[styles.summaryValue, { color: '#E74C3C' }]}>-{totalSoldWeight.toFixed(3)}g</Text></View>
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Returned Deduction</Text><Text style={[styles.summaryValue, { color: '#E74C3C' }]}>-{totalReturnedWeight.toFixed(3)}g</Text></View>
-          
+          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>{prevResolved.label === 'Current Balance' ? 'Previous Balance' : `Previous ${prevResolved.label}`}</Text><Text style={styles.summaryValue}>{prevResolved.value.toFixed(3)}g</Text></View>
+          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Sold Weight (Added to Balance)</Text><Text style={[styles.summaryValue, { color: '#E74C3C' }]}>+{totalSoldWeight.toFixed(3)}g</Text></View>
+          {/* A fully returned item is a balance no-op (Outstanding = Issued - Returned = 0) — never deducted. */}
+          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Returned Deduction</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>0.000g</Text></View>
+
           <View style={styles.divider} />
-          
+
           <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Total Received (Cash + Gold)</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>₹{totalReceived.toFixed(2)}</Text></View>
 
           <View style={styles.divider} />
-          
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Final Balance</Text><Text style={[styles.summaryValue, { color: finalBalance > 0 ? '#E74C3C' : '#27AE60' }]}>{finalBalance.toFixed(3)}g</Text></View>
-          <View style={styles.summaryRow}><Text style={styles.summaryLabel}>Advance Balance</Text><Text style={[styles.summaryValue, { color: '#27AE60' }]}>{newAdvance.toFixed(3)}g</Text></View>
+
+          {/* Single final balance — never shown alongside its counterpart. */}
+          <View style={styles.summaryRow}><Text style={[styles.summaryLabel, {fontWeight: '800', color: DARK_BROWN}]}>{finalResolved.label}</Text><Text style={[styles.summaryValue, { color: finalResolved.value > 0 ? (finalResolved.label === 'Old Balance' ? '#E74C3C' : '#27AE60') : DARK_BROWN }]}>{finalResolved.value.toFixed(3)}g</Text></View>
         </View>
 
         <View style={{ flexDirection: 'row', gap: 12 }}>
-          <TouchableOpacity 
-            style={[styles.submitBtn, { flex: 1 }, (saving || savingAndPrinting) && { opacity: 0.7 }]}
-            disabled={saving || savingAndPrinting}
-            onPress={() => handleSettle('save')}
+          <TouchableOpacity
+            style={[styles.submitBtn, { flex: 1, backgroundColor: '#8A6B3C' }]}
+            onPress={handleCancel}
           >
-            {saving ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="content-save" size={20} color="#FFF" />}
-            <Text style={styles.submitBtnText}>{saving ? 'Saving...' : 'Save'}</Text>
+            <MaterialCommunityIcons name="close" size={20} color="#FFF" />
+            <Text style={styles.submitBtnText}>Cancel</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity 
-            style={[styles.submitBtn, { flex: 1, backgroundColor: '#2E7D32' }, (saving || savingAndPrinting) && { opacity: 0.7 }]}
-            disabled={saving || savingAndPrinting}
-            onPress={() => handleSettle('print')}
+          <TouchableOpacity
+            style={[styles.submitBtn, { flex: 1, backgroundColor: '#2E7D32' }]}
+            onPress={handlePreview}
           >
-            {savingAndPrinting ? <ActivityIndicator size="small" color="#FFF" /> : <MaterialCommunityIcons name="printer" size={20} color="#FFF" />}
-            <Text style={styles.submitBtnText}>{savingAndPrinting ? 'Printing...' : 'Save & Print'}</Text>
+            <MaterialCommunityIcons name="eye-outline" size={20} color="#FFF" />
+            <Text style={styles.submitBtnText}>Preview</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
