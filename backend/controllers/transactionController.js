@@ -1,10 +1,18 @@
 const Transaction = require('../models/Transaction');
 const Stock = require('../models/Stock');
+const StockMaster = require('../models/StockMaster');
 const Customer = require('../models/Customer');
 const StockMovement = require('../models/StockMovement');
 const ReceivedInventory = require('../models/ReceivedInventory');
 const cashLedgerController = require('./cashLedgerController');
 const { safeNumber } = require('../utils/safeNumber');
+const { validateIssueWeights, deductIssueWeights, restoreIssueWeights } = require('./stockMasterController');
+
+// B2C (Plus and Wastage) and B2D issue items are matched against the
+// name-based Stock Master pool by Item Name — never Receipt items, and never
+// the barcode/Item Number Stock collection (Line Stock's own system, left
+// completely untouched).
+const usesStockMaster = (transactionType) => transactionType === 'B2C' || transactionType === 'B2D';
 
 // Guards Cash fields (amount/rate on issue & receipt items) against Infinity/-Infinity/NaN
 // before they ever reach MongoDB.
@@ -71,17 +79,17 @@ const computePlusOutstanding = (issuePure, receiptPure, totalCash, totalGram, ol
 };
 
 // B2D Final Balance: gram-only ledger, no cash. Case 1 (customer holds an Old
-// Balance, or neither): Final = (Old Balance + Receipt Gram) - Issue Gram.
-// Case 2 (customer holds an Advance): Final = Receipt Gram - (Advance - Issue Gram).
+// Balance, or neither): Final = (Old Balance + Issue Gram) - Receipt Gram.
+// Case 2 (customer holds an Advance): Final = Issue Gram - (Advance + Receipt Gram).
 // Either case auto-converts a sign flip instead of ever leaving the result negative.
 const computeB2DBalance = (oldBefore, advanceBefore, issueGram, receiptGram) => {
   if (advanceBefore > 0 && oldBefore === 0) {
-    const final = safeNumber(receiptGram - (advanceBefore - issueGram));
+    const final = safeNumber(issueGram - (advanceBefore + receiptGram));
     return final < 0
       ? { oldAfter: safeNumber(Math.abs(final)), advanceAfter: 0 }
       : { oldAfter: 0, advanceAfter: final };
   }
-  const final = safeNumber((oldBefore + receiptGram) - issueGram);
+  const final = safeNumber((oldBefore + issueGram) - receiptGram);
   return final < 0
     ? { oldAfter: 0, advanceAfter: safeNumber(Math.abs(final)) }
     : { oldAfter: final, advanceAfter: 0 };
@@ -184,6 +192,15 @@ exports.createTransaction = async (req, res) => {
       }
     }
 
+    // Stock Master validation — checked BEFORE anything is written, so an
+    // insufficient item blocks the whole bill instead of partially saving.
+    if (usesStockMaster(transactionType)) {
+      const stockCheck = await validateIssueWeights(issueItems);
+      if (!stockCheck.ok) {
+        return res.status(400).json({ success: false, message: stockCheck.message });
+      }
+    }
+
     // 1. Create the transaction
     const newTransaction = await Transaction.create({
       transactionType,
@@ -269,6 +286,12 @@ exports.createTransaction = async (req, res) => {
           }
         }
       }
+    }
+
+    // 2.1 Deduct the manually-entered Item Name + Weight from the Stock Master
+    // pool — receipt items never affect it (they're transaction entries only).
+    if (usesStockMaster(transactionType) && issueItems && issueItems.length > 0) {
+      await deductIssueWeights(issueItems);
     }
 
     // 2.5 Log Received Items separately into ReceivedInventory
@@ -513,6 +536,38 @@ exports.updateTransaction = async (req, res) => {
       }
     }
 
+    // Reconcile Stock Master (name-based) deduction — validated as a NET
+    // per-name delta (old items freed up, new items requested) BEFORE
+    // anything is written, so a still-insufficient edit is rejected cleanly
+    // instead of leaving stock partially restored.
+    if (usesStockMaster(transaction.transactionType)) {
+      const oldByName = new Map();
+      for (const it of transaction.issueItems || []) {
+        const name = String(it.itemName || '').trim().toLowerCase();
+        if (!name) continue;
+        oldByName.set(name, (oldByName.get(name) || 0) + (parseFloat(it.weight) || 0));
+      }
+      const newByName = new Map();
+      for (const it of sanitizedNewIssueItems) {
+        const name = String(it.itemName || '').trim().toLowerCase();
+        if (!name) continue;
+        newByName.set(name, (newByName.get(name) || 0) + (parseFloat(it.weight) || 0));
+      }
+      const allNames = new Set([...oldByName.keys(), ...newByName.keys()]);
+      for (const name of allNames) {
+        const delta = (newByName.get(name) || 0) - (oldByName.get(name) || 0);
+        if (delta > 0) {
+          const stock = await StockMaster.findOne({ itemNameLower: name });
+          const available = stock ? stock.totalWeight : 0;
+          if (delta > available + 1e-6) {
+            return res.status(400).json({ success: false, message: 'Insufficient Stock Available' });
+          }
+        }
+      }
+      await restoreIssueWeights(transaction.issueItems);
+      await deductIssueWeights(sanitizedNewIssueItems);
+    }
+
     // Recalculate totals from new items
     const newIssueTotalWeight = parseFloat(sanitizedNewIssueItems.reduce((s, i) => s + (i.weight || 0), 0).toFixed(3));
     const newIssueTotalPurity = parseFloat(sanitizedNewIssueItems.reduce((s, i) => s + (i.purity || 0), 0).toFixed(3));
@@ -741,6 +796,11 @@ exports.deleteTransaction = async (req, res) => {
           }
         }
       }
+    }
+
+    // 1.5 Restore Stock Master (name-based) weight for this transaction's issue items
+    if (usesStockMaster(transaction.transactionType)) {
+      await restoreIssueWeights(transaction.issueItems);
     }
 
     // 2. Delete movement logs and received inventory for this transaction

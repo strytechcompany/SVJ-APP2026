@@ -141,6 +141,14 @@ export const dashboardAPI = {
   getRecentIssued: () => api.get('/dashboard/recent-issued'),
 };
 
+export const stockMasterAPI = {
+  create: (data) => api.post('/stock-master/create', data),
+  getAll: (params) => api.get('/stock-master/all', { params }),
+  getById: (id) => api.get(`/stock-master/${id}`),
+  update: (id, data) => api.put(`/stock-master/update/${id}`, data),
+  remove: (id) => api.delete(`/stock-master/delete/${id}`),
+};
+
 export const stockAPI = {
   create: (data) => api.post('/stock/create', data),
   getAll: (params) => api.get('/stock/all', { params }),

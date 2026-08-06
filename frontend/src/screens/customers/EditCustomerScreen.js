@@ -31,6 +31,8 @@ function validate(values, customerType) {
   if (!values.address.trim()) errs.address = 'Address is required';
   if (customerType === 'B2D' && !values.dealerCompanyName.trim())
     errs.dealerCompanyName = 'Dealer company name is required for B2D';
+  if (customerType === 'B2C' && !values.customerCategory)
+    errs.customerCategory = 'Please select Plus User or Wastage User';
   return errs;
 }
 
@@ -53,6 +55,7 @@ export default function EditCustomerScreen({ navigation, route }) {
     oldBalance: String(customer.oldBalance ?? 0),
     advance: String(customer.advance ?? 0),
     remarks: customer.remarks || '',
+    customerCategory: customer.customerCategory || '',
   });
 
   const handleChange = useCallback((field, text) => {
@@ -79,6 +82,7 @@ export default function EditCustomerScreen({ navigation, route }) {
         oldBalance: parseFloat(values.oldBalance) || 0,
         advance: parseFloat(values.advance) || 0,
         remarks: values.remarks.trim(),
+        customerCategory: customer.customerType === 'B2C' ? values.customerCategory : '',
       });
 
       if (result.success) {

@@ -25,6 +25,7 @@ import CashLedgerScreen from '../screens/reports/CashLedgerScreen';
 import StockManagementScreen from '../screens/stock/StockManagementScreen';
 import AddStockScreen from '../screens/stock/AddStockScreen';
 import StockDetailScreen from '../screens/stock/StockDetailScreen';
+import StockMasterScreen from '../screens/stock/StockMasterScreen';
 
 // Customer module
 import CustomerListScreen from '../screens/customers/CustomerListScreen';
@@ -121,6 +122,7 @@ export default function AppNavigator() {
             <Stack.Screen name="StockManagement" component={StockManagementScreen} />
             <Stack.Screen name="AddStock" component={AddStockScreen} />
             <Stack.Screen name="StockDetail" component={StockDetailScreen} />
+            <Stack.Screen name="StockMaster" component={StockMasterScreen} />
 
             {/* Transactions */}
             <Stack.Screen name="TransactionManagement" component={TransactionManagementScreen} />

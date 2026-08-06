@@ -4,6 +4,7 @@ const Customer = require('../models/Customer');
 const Stock = require('../models/Stock');
 const Transaction = require('../models/Transaction');
 const CashLedger = require('../models/CashLedger');
+const { validateIssueWeights, deductIssueWeights, restoreIssueWeights } = require('./stockMasterController');
 
 // ─── Get Dashboard Summary ────────────────────────────────────────────────────
 exports.getDashboardSummary = async (req, res) => {
@@ -140,6 +141,14 @@ exports.issueStock = async (req, res) => {
       totalItems += parseInt(item.count);
     }
 
+    // Also validate against the name-based Stock Master pool (shared with
+    // B2C Plus/Wastage and B2D) BEFORE any writes — an issued item's weight
+    // is matched by Item Name, same as everywhere else.
+    const stockMasterCheck = await validateIssueWeights(issuedProducts);
+    if (!stockMasterCheck.ok) {
+      return res.status(400).json({ success: false, message: stockMasterCheck.message });
+    }
+
     // Before/After here is a PROJECTION only — "if this bill is saved as-is,
     // this is what the balance would become". The real commit happens on
     // "Save Bill" (PLUS style, see updateBillStyle below) or when a Wastage
@@ -189,6 +198,7 @@ exports.issueStock = async (req, res) => {
       if (stock.quantity === 0) stock.isAvailable = false;
       await stock.save();
     }
+    await deductIssueWeights(issuedProducts);
 
     await transaction.save();
 
@@ -373,6 +383,37 @@ exports.updateTransaction = async (req, res) => {
       }
     }
 
+    // Reconcile Stock Master (name-based) the same way — net per-name delta
+    // validated BEFORE anything is written, then restore-old/deduct-new.
+    {
+      const oldByName = new Map();
+      for (const it of transaction.issuedProducts || []) {
+        const name = String(it.itemName || '').trim().toLowerCase();
+        if (!name) continue;
+        oldByName.set(name, (oldByName.get(name) || 0) + (parseFloat(it.weight) || 0));
+      }
+      const newByName = new Map();
+      for (const it of newIssuedProducts) {
+        const name = String(it.itemName || '').trim().toLowerCase();
+        if (!name) continue;
+        newByName.set(name, (newByName.get(name) || 0) + (parseFloat(it.weight) || 0));
+      }
+      const allNames = new Set([...oldByName.keys(), ...newByName.keys()]);
+      for (const name of allNames) {
+        const delta = (newByName.get(name) || 0) - (oldByName.get(name) || 0);
+        if (delta > 0) {
+          const StockMaster = require('../models/StockMaster');
+          const stock = await StockMaster.findOne({ itemNameLower: name });
+          const available = stock ? stock.totalWeight : 0;
+          if (delta > available + 1e-6) {
+            return res.status(400).json({ success: false, message: 'Insufficient Stock Available' });
+          }
+        }
+      }
+      await restoreIssueWeights(transaction.issuedProducts);
+      await deductIssueWeights(newIssuedProducts);
+    }
+
     const newTotalItems = newIssuedProducts.reduce((s, i) => s + (parseInt(i.count) || 1), 0);
     const newTotalGram = parseFloat(newIssuedProducts.reduce((s, i) => s + (parseFloat(i.weight) || 0), 0).toFixed(3));
 
@@ -439,6 +480,7 @@ exports.deleteTransaction = async (req, res) => {
         });
       }
     }
+    await restoreIssueWeights(transaction.issuedProducts);
 
     // Reverse this transaction's impact on the customer's old balance only
     if (transaction.totalGram) {
@@ -479,6 +521,9 @@ exports.clearAllTransactions = async (req, res) => {
             });
           }
         }
+        // Sold items only — returned items were already restored to Stock
+        // Master at settlement time, redoing that here would double-count.
+        await restoreIssueWeights(settlement?.soldItems || []);
       } else {
         for (const item of txn.issuedProducts || []) {
           if (item.stockId) {
@@ -488,6 +533,7 @@ exports.clearAllTransactions = async (req, res) => {
             });
           }
         }
+        await restoreIssueWeights(txn.issuedProducts || []);
       }
     }
 

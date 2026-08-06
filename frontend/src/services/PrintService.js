@@ -1550,7 +1550,7 @@ const generateBalanceSettlementHTML = (settlement) => {
 
   const itemRows = items.map(item => `
     <tr>
-      <td>${item.mode === 'CASH' ? `Rs.${formatMoney(item.cashAmount)} @ Rs.${formatMoney(item.goldRate)}` : 'Gram Entry'}</td>
+      <td>${item.mode === 'CASH' ? `Cash: Rs.${formatMoney(item.cashAmount)}` : item.mode === 'GRAM' ? `Rs.${formatMoney(item.cashAmount)} @ Rs.${formatMoney(item.goldRate)}` : 'Gram Entry'}</td>
       <td style="text-align:right;">${safeNumber(item.gram).toFixed(3)}g</td>
     </tr>
   `).join('');

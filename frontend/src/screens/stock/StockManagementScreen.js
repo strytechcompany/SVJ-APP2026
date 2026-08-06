@@ -175,21 +175,31 @@ export default function StockManagementScreen({ navigation }) {
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + (Platform.OS === 'android' ? 10 : 0) }]}>
         <Text style={styles.headerTitle}>Inventory Dashboard</Text>
-        <TouchableOpacity
-          style={styles.refreshBtn}
-          onPress={handleRefresh}
-          activeOpacity={0.7}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          disabled={loading || refreshing}
-        >
-          <Animated.View style={{ transform: [{ rotate: spin }] }}>
-            <MaterialCommunityIcons
-              name="refresh"
-              size={22}
-              color={(loading || refreshing) ? 'rgba(212,175,55,0.4)' : GOLD}
-            />
-          </Animated.View>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={() => navigation.navigate('StockMaster')}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <MaterialCommunityIcons name="clipboard-text-outline" size={20} color={GOLD} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={handleRefresh}
+            activeOpacity={0.7}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            disabled={loading || refreshing}
+          >
+            <Animated.View style={{ transform: [{ rotate: spin }] }}>
+              <MaterialCommunityIcons
+                name="refresh"
+                size={22}
+                color={(loading || refreshing) ? 'rgba(212,175,55,0.4)' : GOLD}
+              />
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Tabs */}

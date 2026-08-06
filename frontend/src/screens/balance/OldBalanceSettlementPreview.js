@@ -157,7 +157,7 @@ export default function OldBalanceSettlementPreview({ route, navigation }) {
           {items.map((item, idx) => (
             <View key={idx} style={styles.itemRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.itemName}>{item.mode === 'CASH' ? `₹${Number(item.cashAmount).toLocaleString('en-IN')} @ ₹${item.goldRate}` : 'Gram Entry'}</Text>
+                <Text style={styles.itemName}>{item.mode === 'CASH' ? `Cash: ₹${Number(item.cashAmount).toLocaleString('en-IN')}` : item.mode === 'GRAM' ? `₹${Number(item.cashAmount).toLocaleString('en-IN')} @ ₹${item.goldRate}` : 'Gram Entry'}</Text>
                 <Text style={styles.itemSub}>{Number(item.gram).toFixed(3)}g</Text>
               </View>
             </View>

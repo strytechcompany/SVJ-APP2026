@@ -71,46 +71,23 @@ function ItemRow({ item, onEdit, onDelete, onPress }) {
       onPress={() => onPress(item)}
       activeOpacity={0.8}
     >
-      {/* Item Number Badge & Item Name */}
-      <View style={styles.itemBadgeContainer}>
-        <View style={styles.itemBadge}>
-          <Text style={styles.itemBadgeText}>{item.itemNumber}</Text>
-        </View>
+      <View style={styles.itemDetails}>
         {item.itemName ? (
           <Text style={styles.itemNameText} numberOfLines={2}>
             {item.itemName}
           </Text>
         ) : null}
-      </View>
-
-      <View style={styles.itemDetails}>
-        <View style={styles.itemDetailRow}>
-          <View style={styles.detailChip}>
-            <MaterialCommunityIcons name="tag" size={11} color={GOLD} />
-            <Text style={styles.detailChipText}>{item.category}</Text>
-          </View>
-          <View style={styles.detailChip}>
-            <MaterialCommunityIcons name="gold" size={11} color={GOLD} />
-            <Text style={styles.detailChipText}>{item.purity}</Text>
-          </View>
-        </View>
 
         <View style={styles.itemMetaRow}>
           <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>Qty</Text>
-            <Text style={styles.metaValue}>{getQuantity(item)}</Text>
-          </View>
-          <View style={styles.metaDivider} />
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>Net Wt</Text>
-            <Text style={styles.metaValue}>{getWeight(item.netWeight).toFixed(3)} g</Text>
-          </View>
-          <View style={styles.metaDivider} />
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>Gross Wt</Text>
-            <Text style={styles.metaValue}>{getWeight(item.grossWeight).toFixed(3)} g</Text>
+            <Text style={styles.metaLabel}>Total Weight</Text>
+            <Text style={styles.metaValue}>{getWeight(item).toFixed(3)} g</Text>
           </View>
         </View>
+
+        {item.notes ? (
+          <Text style={styles.itemDescText} numberOfLines={2}>{item.notes}</Text>
+        ) : null}
       </View>
 
       <View style={styles.itemActions}>
@@ -347,64 +324,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 14,
   },
-  itemBadgeContainer: {
-    marginRight: 12,
-    minWidth: 75,
-    maxWidth: 90,
-  },
-  itemBadge: {
-    backgroundColor: '#F8F4E8',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#E5D8C0',
-    alignItems: 'center',
-  },
-  itemBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: DARK_BROWN,
-    letterSpacing: 0.5,
-  },
   itemNameText: {
-    marginTop: 6,
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: '800',
-    color: '#8A6822',
-    textAlign: 'center',
-    lineHeight: 14,
+    color: DARK_BROWN,
+    marginBottom: 6,
   },
   itemDetails: {
     flex: 1,
-  },
-  itemDetailRow: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 8,
-  },
-  detailChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF8E8',
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    gap: 3,
-    borderWidth: 1,
-    borderColor: '#F0E0A0',
-  },
-  detailChipText: {
-    fontSize: 10,
-    color: DARK_BROWN,
-    fontWeight: '600',
   },
   itemMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   metaItem: {
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   metaLabel: {
     fontSize: 9,
@@ -419,11 +353,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 1,
   },
-  metaDivider: {
-    width: 1,
-    height: 28,
-    backgroundColor: '#E5D8C0',
-    marginHorizontal: 12,
+  itemDescText: {
+    fontSize: 11,
+    color: '#8A6822',
+    marginTop: 6,
+    lineHeight: 14,
   },
   itemActions: {
     flexDirection: 'column',

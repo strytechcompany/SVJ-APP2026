@@ -5,6 +5,7 @@ const Customer = require('../models/Customer');
 const Transaction = require('../models/Transaction');
 const cashLedgerController = require('./cashLedgerController');
 const { computeWastageCashBalance } = require('../utils/wastageCashBalance');
+const { restoreIssueWeights } = require('./stockMasterController');
 
 exports.createSettlement = async (req, res) => {
   try {
@@ -39,6 +40,10 @@ exports.createSettlement = async (req, res) => {
         await stockItem.save();
       }
     }
+    // Also add the returned weight back to the name-based Stock Master pool
+    // (shared with B2C/B2D/Line Stock Issue). Sold items are NOT touched here
+    // — they were already deducted at Issue time and must stay deducted.
+    await restoreIssueWeights(returnedItems);
 
     let totalSoldWeight = 0;
     for (const item of soldItems) {

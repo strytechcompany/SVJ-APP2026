@@ -1,4 +1,27 @@
 const Stock = require('../models/Stock');
+const StockMaster = require('../models/StockMaster');
+
+// Keeps the name-based Stock Master pool (used by B2C/B2D/Line Stock item
+// search + auto-deduction) in sync with the barcode/Item Number Stock
+// collection — additive top-up by Item Name (falling back to Design Name),
+// case-insensitive, mirroring exactly what a manual Stock Master "Add Stock"
+// entry would do. Never blocks or fails the actual Stock save if it errors.
+async function syncStockMasterWeight(resolvedName, weightDelta) {
+  const name = String(resolvedName || '').trim();
+  if (!name || !weightDelta) return;
+  try {
+    const nameLower = name.toLowerCase();
+    let item = await StockMaster.findOne({ itemNameLower: nameLower });
+    if (item) {
+      item.totalWeight = parseFloat(Math.max(0, item.totalWeight + weightDelta).toFixed(3));
+      await item.save();
+    } else if (weightDelta > 0) {
+      await StockMaster.create({ itemName: name, totalWeight: parseFloat(weightDelta.toFixed(3)), description: '' });
+    }
+  } catch (e) {
+    console.error('syncStockMasterWeight error:', e.message);
+  }
+}
 
 const parseNumericValue = (value) => {
   if (value === null || value === undefined || value === '') return 0;
@@ -71,6 +94,7 @@ exports.createStock = async (req, res) => {
     });
 
     await stock.save();
+    await syncStockMasterWeight(stock.itemName || stock.designName, stock.netWeight);
 
     res.status(201).json({
       success: true,
@@ -185,6 +209,53 @@ exports.getAllStock = async (req, res) => {
     const totalGroups  = result?.totalGroups?.[0]?.n ?? 0;
 
     console.log('[getAllStock] groups returned:', groupedArray.length, '| total groups:', totalGroups);
+
+    // Overlay the live Stock Master remaining weight — B2C/B2D/Line Stock
+    // deduct from Stock Master (matched by Item Name), never from this
+    // record's own grossWeight/netWeight, so the group/record weight shown
+    // here would otherwise always be the ORIGINAL weight, never the
+    // remaining one. Group total = sum of each distinct resolved name's
+    // current Stock Master weight (counted once per name, not per record,
+    // so multiple records sharing a name are never double-counted). A
+    // record's own weight is only overlaid when it's the sole record for
+    // its name in the group — otherwise there's no single correct way to
+    // split one shared pool back across several records, so it's left as-is.
+    const allNamesLower = new Set();
+    for (const group of groupedArray) {
+      for (const rec of group.records || []) {
+        const name = (rec.itemName || rec.designName || '').trim().toLowerCase();
+        if (name) allNamesLower.add(name);
+      }
+    }
+    if (allNamesLower.size > 0) {
+      const stockMasterDocs = await StockMaster.find({ itemNameLower: { $in: [...allNamesLower] } });
+      const stockMasterMap = new Map(stockMasterDocs.map(d => [d.itemNameLower, d.totalWeight]));
+
+      for (const group of groupedArray) {
+        const nameCounts = new Map();
+        for (const rec of group.records || []) {
+          const name = (rec.itemName || rec.designName || '').trim().toLowerCase();
+          if (name) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+        }
+        let correctedTotal = 0;
+        for (const nameLower of nameCounts.keys()) {
+          if (stockMasterMap.has(nameLower)) correctedTotal += stockMasterMap.get(nameLower);
+        }
+        if (nameCounts.size > 0) {
+          group.totalWeight = parseFloat(correctedTotal.toFixed(3));
+          group.totalNetWeight = group.totalWeight;
+          group.totalStockWeight = group.totalWeight;
+        }
+        for (const rec of group.records || []) {
+          const name = (rec.itemName || rec.designName || '').trim().toLowerCase();
+          if (name && nameCounts.get(name) === 1 && stockMasterMap.has(name)) {
+            const remaining = stockMasterMap.get(name);
+            if (rec.grossWeight != null) rec.grossWeight = remaining;
+            if (rec.netWeight != null) rec.netWeight = remaining;
+          }
+        }
+      }
+    }
 
     res.json({
       success: true,
@@ -351,6 +422,8 @@ exports.updateStock = async (req, res) => {
     if (!stock) {
       return res.status(404).json({ success: false, message: 'Stock item not found' });
     }
+    const prevResolvedName = stock.itemName || stock.designName;
+    const prevNetWeight = stock.netWeight;
 
     if (itemNumber !== undefined && String(itemNumber).trim()) {
       const inTrimmed = String(itemNumber).trim().toUpperCase();
@@ -376,6 +449,18 @@ exports.updateStock = async (req, res) => {
     if (notes !== undefined) stock.notes = notes;
 
     await stock.save();
+
+    // Reconcile the Stock Master pool by the same net delta the rest of the
+    // app uses for edits — same name: adjust by the weight difference;
+    // renamed: move the old weight out of its old pool into the new one.
+    const newResolvedName = stock.itemName || stock.designName;
+    const newNetWeight = stock.netWeight;
+    if ((prevResolvedName || '').trim().toLowerCase() === (newResolvedName || '').trim().toLowerCase()) {
+      await syncStockMasterWeight(newResolvedName, newNetWeight - prevNetWeight);
+    } else {
+      await syncStockMasterWeight(prevResolvedName, -prevNetWeight);
+      await syncStockMasterWeight(newResolvedName, newNetWeight);
+    }
 
     res.json({
       success: true,
@@ -416,6 +501,7 @@ exports.deleteStock = async (req, res) => {
     }
 
     await Stock.findByIdAndDelete(req.params.id);
+    await syncStockMasterWeight(stock.itemName || stock.designName, -stock.netWeight);
 
     res.json({ success: true, message: 'Stock item deleted successfully' });
   } catch (error) {
@@ -474,6 +560,18 @@ exports.deleteStockGroup = async (req, res) => {
       StockMovement.deleteMany({ stockId: { $in: stockIds } }),
       Stock.deleteMany({ _id: { $in: stockIds } }),
     ]);
+
+    // Remove this design's contributed weight from each affected name's
+    // Stock Master pool.
+    const weightByName = new Map();
+    for (const s of stocks) {
+      const name = (s.itemName || s.designName || '').trim();
+      if (!name) continue;
+      weightByName.set(name, (weightByName.get(name) || 0) - (s.netWeight || 0));
+    }
+    for (const [name, delta] of weightByName) {
+      await syncStockMasterWeight(name, delta);
+    }
 
     res.json({ success: true, message: 'Stock deleted successfully', deletedCount: stockIds.length });
   } catch (error) {

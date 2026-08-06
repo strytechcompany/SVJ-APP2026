@@ -190,6 +190,15 @@ exports.updateCustomer = async (req, res) => {
       }
     });
 
+    // customerCategory only applies to B2C (enum: PLUS/WASTAGE) — an empty
+    // string would fail the enum validator, so non-B2C customers must clear
+    // it to undefined instead, mirroring createCustomer's own handling.
+    if (req.body.customerCategory !== undefined) {
+      customer.customerCategory = customer.customerType === 'B2C'
+        ? req.body.customerCategory
+        : undefined;
+    }
+
     await customer.save();
 
     res.json({

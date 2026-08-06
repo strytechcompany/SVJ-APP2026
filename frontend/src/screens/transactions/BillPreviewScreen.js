@@ -320,16 +320,18 @@ export default function BillPreviewScreen({ navigation, route }) {
     : { oldBalance: wastageDisplayOldAfter, advanceBalance: wastageDisplayAdvanceAfter };
 
   // Plus: Total Cash (Cash Table's Final Gram sum) and Total Gram (Gram Table
-  // sum), and the Remainder Table's Final Current Balance.
+  // sum). The Remainder Table's Final Current Balance is loaded straight from
+  // the already-computed oldBalanceAfter/advanceBalanceAfter (TransactionCalc
+  // ulationScreen.js applies the Reminder Pure subtraction and settles which
+  // side is active BEFORE building the payload) — never recalculated here.
+  // Reconstructing it from the single signed plusOutstanding value was wrong:
+  // whether a positive plusOutstanding means Old or Advance flips depending on
+  // which Case (1 or 2) was active, so it silently mislabeled the balance.
   const plusTotalCashVal = safeNumber(plusFinalGram);
   const plusTotalGramVal = safeNumber(plusTotalGram);
   const plusOutstandingVal = safeNumber(plusOutstanding);
   const plusReminderPureVal = safeNumber(plusReminderPure);
-  const plusRemainderResult = applyRemainderSubtraction(
-    plusOutstandingVal >= 0 ? plusOutstandingVal : 0,
-    plusOutstandingVal < 0 ? Math.abs(plusOutstandingVal) : 0,
-    plusReminderPureVal
-  );
+  const plusRemainderResult = { oldBalance: safeNumber(oldBalanceAfter), advanceBalance: safeNumber(advanceBalanceAfter) };
 
   return (
     <View style={styles.container}>

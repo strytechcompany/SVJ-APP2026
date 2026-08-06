@@ -25,8 +25,12 @@ export default function AdvanceBalanceSettlement({ route, navigation }) {
   // Only one mode active at a time.
   const [settlementMode, setSettlementMode] = useState('CASH');
   const [cashAmount, setCashAmount] = useState('');
-  const [goldRate, setGoldRate] = useState('');
-  const [gramInput, setGramInput] = useState('');
+  // Gram Mode: Settlement Gram is always auto-calculated (Cash Amount ÷ Gold
+  // Rate) — never entered directly.
+  const [gramCashAmount, setGramCashAmount] = useState('');
+  const [gramGoldRate, setGramGoldRate] = useState('');
+  // Gram Entry Mode: admin types the settlement Gram directly, no cash calc.
+  const [gramEntryInput, setGramEntryInput] = useState('');
   const [items, setItems] = useState([]);
 
   useEffect(() => {
@@ -45,32 +49,50 @@ export default function AdvanceBalanceSettlement({ route, navigation }) {
     load();
   }, [customerId, navigation]);
 
+  // Cash Mode settles using the Cash Amount directly (matching whatever unit
+  // this customer's balance is actually stored in) — no Gold Rate conversion.
+  // Gram Mode converts Cash Amount to gram via Gold Rate: Settlement Gram =
+  // Cash Amount ÷ Gold Rate — recalculates live as either field changes.
+  // Gram Entry Mode uses the typed Gram value directly — no cash calculation.
   const liveGram = settlementMode === 'CASH'
-    ? (safeNumber(parseFloat(goldRate)) > 0 ? safeNumber(safeNumber(parseFloat(cashAmount)) / safeNumber(parseFloat(goldRate))) : 0)
-    : safeNumber(parseFloat(gramInput));
+    ? safeNumber(parseFloat(cashAmount))
+    : settlementMode === 'GRAM'
+    ? (safeNumber(parseFloat(gramGoldRate)) > 0 ? safeNumber(safeNumber(parseFloat(gramCashAmount)) / safeNumber(parseFloat(gramGoldRate))) : 0)
+    : safeNumber(parseFloat(gramEntryInput));
 
   const handleAddItem = () => {
     if (settlementMode === 'CASH') {
-      if (!cashAmount || !goldRate) {
-        Alert.alert('Error', 'Cash Amount and Gold Rate are required.');
+      if (!cashAmount) {
+        Alert.alert('Error', 'Cash Amount is required.');
         return;
       }
       setItems(prev => [...prev, {
         id: Date.now().toString(), mode: 'CASH',
-        cashAmount: safeNumber(parseFloat(cashAmount)), goldRate: safeNumber(parseFloat(goldRate)),
+        cashAmount: safeNumber(parseFloat(cashAmount)), goldRate: 0,
         gram: liveGram,
       }]);
-      setCashAmount(''); setGoldRate('');
-    } else {
-      if (!gramInput) {
-        Alert.alert('Error', 'Gram is required.');
+      setCashAmount('');
+    } else if (settlementMode === 'GRAM') {
+      if (!gramCashAmount || !gramGoldRate) {
+        Alert.alert('Error', 'Cash Amount and Gold Rate are required.');
         return;
       }
       setItems(prev => [...prev, {
         id: Date.now().toString(), mode: 'GRAM',
-        cashAmount: 0, goldRate: 0, gram: safeNumber(parseFloat(gramInput)),
+        cashAmount: safeNumber(parseFloat(gramCashAmount)), goldRate: safeNumber(parseFloat(gramGoldRate)),
+        gram: liveGram,
       }]);
-      setGramInput('');
+      setGramCashAmount(''); setGramGoldRate('');
+    } else {
+      if (!gramEntryInput) {
+        Alert.alert('Error', 'Gram is required.');
+        return;
+      }
+      setItems(prev => [...prev, {
+        id: Date.now().toString(), mode: 'GRAM_ENTRY',
+        cashAmount: 0, goldRate: 0, gram: liveGram,
+      }]);
+      setGramEntryInput('');
     }
   };
 
@@ -163,6 +185,12 @@ export default function AdvanceBalanceSettlement({ route, navigation }) {
             >
               <Text style={styles.modeBtnText}>Gram Mode</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeBtn, { backgroundColor: settlementMode === 'GRAM_ENTRY' ? GOLD : '#F0E4CC' }]}
+              onPress={() => setSettlementMode('GRAM_ENTRY')}
+            >
+              <Text style={styles.modeBtnText}>Gram Entry</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -171,14 +199,22 @@ export default function AdvanceBalanceSettlement({ route, navigation }) {
           {settlementMode === 'CASH' ? (
             <>
               <Text style={styles.sectionTitle}>Cash Settlement</Text>
+              <View style={{ marginBottom: 10 }}>
+                <Text style={styles.label}>Cash Amount (₹)</Text>
+                <TextInput style={styles.input} keyboardType="numeric" value={cashAmount} onChangeText={setCashAmount} placeholder="0" />
+              </View>
+            </>
+          ) : settlementMode === 'GRAM' ? (
+            <>
+              <Text style={styles.sectionTitle}>Gram Settlement</Text>
               <View style={styles.gridRow}>
                 <View style={{ flex: 1, marginRight: 8 }}>
                   <Text style={styles.label}>Cash Amount (₹)</Text>
-                  <TextInput style={styles.input} keyboardType="numeric" value={cashAmount} onChangeText={setCashAmount} placeholder="0" />
+                  <TextInput style={styles.input} keyboardType="numeric" value={gramCashAmount} onChangeText={setGramCashAmount} placeholder="0" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Gold Rate (₹)</Text>
-                  <TextInput style={styles.input} keyboardType="numeric" value={goldRate} onChangeText={setGoldRate} placeholder="0" />
+                  <TextInput style={styles.input} keyboardType="numeric" value={gramGoldRate} onChangeText={setGramGoldRate} placeholder="0" />
                 </View>
               </View>
               <View style={styles.row}>
@@ -188,9 +224,11 @@ export default function AdvanceBalanceSettlement({ route, navigation }) {
             </>
           ) : (
             <>
-              <Text style={styles.sectionTitle}>Gram Settlement</Text>
-              <Text style={styles.label}>Gram</Text>
-              <TextInput style={styles.input} keyboardType="numeric" value={gramInput} onChangeText={setGramInput} placeholder="0.000" />
+              <Text style={styles.sectionTitle}>Gram Entry</Text>
+              <View style={{ marginBottom: 10 }}>
+                <Text style={styles.label}>Gram (g)</Text>
+                <TextInput style={styles.input} keyboardType="numeric" value={gramEntryInput} onChangeText={setGramEntryInput} placeholder="0.000" />
+              </View>
             </>
           )}
           <TouchableOpacity style={styles.addItemBtn} onPress={handleAddItem}>
@@ -206,7 +244,7 @@ export default function AdvanceBalanceSettlement({ route, navigation }) {
             {items.map((item) => (
               <View key={item.id} style={styles.itemRow}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.itemName}>{item.mode === 'CASH' ? `₹${item.cashAmount.toLocaleString('en-IN')} @ ₹${item.goldRate}` : 'Gram Entry'}</Text>
+                  <Text style={styles.itemName}>{item.mode === 'CASH' ? `Cash: ₹${item.cashAmount.toLocaleString('en-IN')}` : item.mode === 'GRAM' ? `₹${item.cashAmount.toLocaleString('en-IN')} @ ₹${item.goldRate}` : 'Gram Entry'}</Text>
                   <Text style={styles.itemSub}>{item.gram.toFixed(3)}g</Text>
                 </View>
                 <TouchableOpacity onPress={() => handleRemoveItem(item.id)}>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
   Alert, StatusBar, Platform, Switch, FlatList
@@ -6,7 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { customerAPI, stockAPI, transactionAPI, settingsAPI } from '../../services/api';
+import { customerAPI, stockAPI, stockMasterAPI, transactionAPI, settingsAPI } from '../../services/api';
 import { useDashboard } from '../../context/DashboardContext';
 import { useTransaction } from '../../context/TransactionContext';
 import { safeNumber } from '../../utils/safeNumber';
@@ -50,18 +50,18 @@ const applyRemainderSubtraction = (oldBalance, advanceBalance, subtraction) => {
 };
 
 // B2D Final Balance: gram-only ledger, no cash. Case 1 (customer holds an Old
-// Balance, or neither): Final = (Old Balance + Receipt Gram) - Issue Gram.
-// Case 2 (customer holds an Advance): Final = Receipt Gram - (Advance - Issue Gram).
+// Balance, or neither): Final = (Old Balance + Issue Gram) - Receipt Gram.
+// Case 2 (customer holds an Advance): Final = Issue Gram - (Advance + Receipt Gram).
 // Either case auto-converts a sign flip instead of ever leaving the result negative.
 // Mirrors the backend's computeB2DBalance.
 const computeB2DBalance = (oldBefore, advanceBefore, issueGram, receiptGram) => {
   if (advanceBefore > 0 && oldBefore === 0) {
-    const final = safeNumber(receiptGram - (advanceBefore - issueGram));
+    const final = safeNumber(issueGram - (advanceBefore + receiptGram));
     return final < 0
       ? { oldAfter: safeNumber(Math.abs(final)), advanceAfter: 0 }
       : { oldAfter: 0, advanceAfter: final };
   }
-  const final = safeNumber((oldBefore + receiptGram) - issueGram);
+  const final = safeNumber((oldBefore + issueGram) - receiptGram);
   return final < 0
     ? { oldAfter: 0, advanceAfter: safeNumber(Math.abs(final)) }
     : { oldAfter: final, advanceAfter: 0 };
@@ -107,39 +107,6 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // Wastage uses a cash model (WW × Rate) and falls into the money-based balance branch below.
   const isGramOnly = isB2D;
 
-  // Stock Search Dropdown
-  const [stockQuery, setStockQuery] = useState('');
-  const [stockResults, setStockResults] = useState([]);
-  const [showStockDropdown, setShowStockDropdown] = useState(false);
-
-  const normalizeScanValue = (value) => {
-    const raw = String(value || '').trim();
-    if (!raw) return '';
-
-    const lines = raw
-      .split(/[\r\n]+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    const primary = lines[0] || raw;
-    return primary.replace(/\s+/g, ' ').trim();
-  };
-
-  const buildScanCandidates = (value) => {
-    const raw = String(value || '').trim();
-    if (!raw) return [];
-
-    const normalized = normalizeScanValue(raw);
-    const noSpaces = normalized.replace(/\s+/g, '');
-    const compact = normalized.replace(/[^a-zA-Z0-9_-]/g, '');
-    const parts = normalized
-      .split(/[\s|,;:/\\]+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    return [...new Set([normalized, noSpaces, compact, raw, ...parts])];
-  };
-
   // Issue Section
   const [issueStockId, setIssueStockId] = useState('');
   const [issueItemNo, setIssueItemNo] = useState('');
@@ -147,6 +114,19 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [issueWeight, setIssueWeight] = useState('');
   const [issueCount, setIssueCount] = useState('1');
   const [issueSRIBill, setIssueSRIBill] = useState('');
+
+  // Shared stock-search UI state — the barcode/name search box used by
+  // Plus, Wastage, and B2D's fillStock/lookupStock/selectStockItem alike.
+  const [stockQuery, setStockQuery] = useState('');
+  const [stockResults, setStockResults] = useState([]);
+  const [showStockDropdown, setShowStockDropdown] = useState(false);
+
+  // Issue Product "Item Name" auto-suggestions — sourced from Stock Master
+  // (name-only, case-insensitive), shared across Plus/Wastage/B2D since only
+  // one Issue Product card is ever rendered at a time. Selecting a suggestion
+  // sets ONLY the Item Name; Weight always stays a fully manual entry.
+  const [itemNameSuggestions, setItemNameSuggestions] = useState([]);
+  const [showItemNameSuggestions, setShowItemNameSuggestions] = useState(false);
 
   // Wastage Issue Section (cash flow: WW = Weight + Wastage, Cash = WW × Rate)
   const [wIssueStockId, setWIssueStockId] = useState('');
@@ -228,6 +208,42 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const [receiptWeight, setReceiptWeight] = useState('');
   const [receiptBuyingPercent, setReceiptBuyingPercent] = useState('');
 
+  // Issue Product Item Name — live suggestions from Stock Master as the admin
+  // types (debounced). Only one of wIssueItemName/bdIssueItemName/issueItemName
+  // is ever active per screen instance (fixed by `type`), so a single shared
+  // query is safe.
+  const currentIssueItemNameQuery = isWastage ? wIssueItemName : isB2D ? bdIssueItemName : issueItemName;
+  useEffect(() => {
+    const query = currentIssueItemNameQuery.trim();
+    if (!query) {
+      setItemNameSuggestions([]);
+      setShowItemNameSuggestions(false);
+      return;
+    }
+    const timeoutId = setTimeout(async () => {
+      try {
+        const res = await stockMasterAPI.getAll({ search: query });
+        if (res.data.success) {
+          setItemNameSuggestions(res.data.data.slice(0, 8));
+          setShowItemNameSuggestions(true);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }, 250);
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIssueItemNameQuery]);
+
+  // Selecting a suggestion sets ONLY the Item Name — Weight is never
+  // auto-filled, it stays a fully manual entry.
+  const selectItemNameSuggestion = (name) => {
+    if (isWastage) setWIssueItemName(name);
+    else if (isB2D) setBdIssueItemName(name);
+    else setIssueItemName(name);
+    setShowItemNameSuggestions(false);
+  };
+
   // Arrays — lazy init from prefilledData so items are available on first render
   const [issueItems, setIssueItems] = useState(() => {
     if (!prefilledData?.issueItems?.length) return [];
@@ -303,6 +319,11 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   // Payment
   const [paymentMode, setPaymentMode] = useState('Cash'); // Cash, Online Payment, Card, Debt, Gold
   const [paymentAmount, setPaymentAmount] = useState('');
+  // Wastage's Amount Collected auto-fills from the live calculated amount
+  // until the admin actually types into it — a plain fallback in the
+  // TextInput's `value` prop would re-snap to the calculated amount the
+  // instant the field is cleared, making it impossible to type a new number.
+  const paymentAmountTouchedRef = useRef(false);
   const [confirmedPayment, setConfirmedPayment] = useState({ amount: 0, grams: 0, mode: '' });
   // Gold Payment specific
   const [goldPayWeight, setGoldPayWeight] = useState('');
@@ -404,6 +425,7 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         ? (prefilledData.goldConvertedAmount || 0)
         : (prefilledData.paymentDetails?.amount || 0);
       if (collectedAmt > 0) {
+        paymentAmountTouchedRef.current = true;
         setPaymentAmount(String(collectedAmt));
         setConfirmedPayment({
           amount: collectedAmt,
@@ -921,6 +943,16 @@ export default function TransactionCalculationScreen({ navigation, route }) {
   const collectedAmount = isWastage ? wastageCollectedAmount : confirmedPayment.amount;
   const collectedGrams = confirmedPayment.grams;
 
+  // Keep Amount Collected auto-filled with the live calculated amount right
+  // up until the admin actually edits it — once touched, their typed value
+  // always wins and is never overwritten by further recalculation.
+  useEffect(() => {
+    if (isWastage && !paymentAmountTouchedRef.current) {
+      setPaymentAmount(finalAmount ? finalAmount.toFixed(2) : '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWastage, finalAmount]);
+
   // Handle Collect Payment Button
   const handleCollectPayment = () => {
     const amt = paymentMode === 'Gold'
@@ -1236,45 +1268,27 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
 
-          <View style={{zIndex: 100}}>
-            <Text style={styles.inputLabel}>Search by Item Number</Text>
-            <View style={styles.barcodeRow}>
-              <TextInput
-                style={styles.barcodeInput}
-                placeholder="Enter Item Number..."
-                placeholderTextColor="#999"
-                value={stockQuery}
-                onChangeText={(t) => { setStockQuery(t); setShowStockDropdown(true); }}
-                onFocus={() => setShowStockDropdown(true)}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-                onSubmitEditing={() => handleStockLookup(stockQuery)}
-              />
-            </View>
-
-            {showStockDropdown && stockResults.length > 0 && (
-              <View style={styles.dropdown}>
-                {stockResults.map(s => (
-                  <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectStockItem(s)}>
-                    <Text style={[styles.dropItemText, { fontWeight: '800', fontSize: 13 }]}>{s.itemNumber}</Text>
-                    <Text style={{ fontSize: 11, color: '#555', marginTop: 2 }}>
-                      {s.itemName || s.designName}  ·  Wt: {s.netWeight}g
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </View>
-
           <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Item Number</Text>
-              <TextInput style={styles.input} value={wIssueItemNo} onChangeText={setWIssueItemNo} />
-            </View>
-            <View style={styles.gridItem}>
+            <View style={[styles.gridItem, { position: 'relative' }]}>
               <Text style={styles.inputLabel}>Item Name</Text>
-              <TextInput style={styles.input} value={wIssueItemName} onChangeText={setWIssueItemName} />
+              <TextInput
+                style={styles.input}
+                value={wIssueItemName}
+                onChangeText={setWIssueItemName}
+                onFocus={() => setShowItemNameSuggestions(itemNameSuggestions.length > 0)}
+              />
+              {showItemNameSuggestions && itemNameSuggestions.length > 0 && (
+                <View style={styles.dropdown}>
+                  <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 150 }}>
+                    {itemNameSuggestions.map((s) => (
+                      <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectItemNameSuggestion(s.itemName)}>
+                        <Text style={styles.dropItemText}>{s.itemName}</Text>
+                        <Text style={styles.dropItemSub}>Remaining Weight: {Number(s.totalWeight).toFixed(3)}g</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
             </View>
           </View>
 
@@ -1320,9 +1334,26 @@ export default function TransactionCalculationScreen({ navigation, route }) {
           <Text style={styles.cardTitle}>Issue Product</Text>
 
           <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
+            <View style={[styles.gridItem, { position: 'relative' }]}>
               <Text style={styles.inputLabel}>Item Name</Text>
-              <TextInput style={styles.input} value={bdIssueItemName} onChangeText={setBdIssueItemName} />
+              <TextInput
+                style={styles.input}
+                value={bdIssueItemName}
+                onChangeText={setBdIssueItemName}
+                onFocus={() => setShowItemNameSuggestions(itemNameSuggestions.length > 0)}
+              />
+              {showItemNameSuggestions && itemNameSuggestions.length > 0 && (
+                <View style={styles.dropdown}>
+                  <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 150 }}>
+                    {itemNameSuggestions.map((s) => (
+                      <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectItemNameSuggestion(s.itemName)}>
+                        <Text style={styles.dropItemText}>{s.itemName}</Text>
+                        <Text style={styles.dropItemSub}>Remaining Weight: {Number(s.totalWeight).toFixed(3)}g</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
             </View>
             <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Weight (g)</Text>
@@ -1356,60 +1387,30 @@ export default function TransactionCalculationScreen({ navigation, route }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Issue Product</Text>
 
-          <View style={{zIndex: 100}}>
-            <Text style={styles.inputLabel}>Enter QR Code to Search Stock</Text>
-            <View style={styles.barcodeRow}>
+          <View style={styles.gridRow}>
+            <View style={[styles.gridItem, { position: 'relative' }]}>
+              <Text style={styles.inputLabel}>Item Name</Text>
               <TextInput
-                style={styles.barcodeInput}
-                placeholder="Search by Item Number, Item Name, Barcode..."
-                placeholderTextColor="#999"
-                value={stockQuery}
-                onChangeText={(t) => { setStockQuery(t); setShowStockDropdown(true); }}
-                onFocus={() => setShowStockDropdown(true)}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-                onSubmitEditing={() => handleStockLookup(stockQuery)}
+                style={styles.input}
+                value={issueItemName}
+                onChangeText={setIssueItemName}
+                onFocus={() => setShowItemNameSuggestions(itemNameSuggestions.length > 0)}
               />
+              {showItemNameSuggestions && itemNameSuggestions.length > 0 && (
+                <View style={styles.dropdown}>
+                  <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 150 }}>
+                    {itemNameSuggestions.map((s) => (
+                      <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectItemNameSuggestion(s.itemName)}>
+                        <Text style={styles.dropItemText}>{s.itemName}</Text>
+                        <Text style={styles.dropItemSub}>Remaining Weight: {Number(s.totalWeight).toFixed(3)}g</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
             </View>
-            
-            {showStockDropdown && stockResults.length > 0 && (
-              <View style={styles.dropdown}>
-                {stockResults.map(s => (
-                  <TouchableOpacity key={s._id} style={styles.dropItem} onPress={() => selectStockItem(s)}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                      <Text style={[styles.dropItemText, { fontWeight: '800', fontSize: 13 }]}>
-                        {s.itemNumber}
-                      </Text>
-                      <View style={{ backgroundColor: s.quantity > 0 ? '#E8F5E9' : '#FDECEA', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 }}>
-                        <Text style={{ fontSize: 11, fontWeight: '700', color: s.quantity > 0 ? '#2E7D32' : '#C0392B' }}>
-                          Qty: {s.quantity}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={{ fontSize: 11, color: '#555', marginBottom: 2 }}>
-                      {s.itemName || s.designName}  ·  {s.category}  ·  {s.purity}
-                    </Text>
-                    <Text style={{ fontSize: 11, color: '#888' }}>
-                      Barcode: {s.barcode}  ·  Wt: {s.netWeight}g
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
           </View>
 
-          <View style={styles.gridRow}>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Item Number</Text>
-              <TextInput style={styles.inputDisabled} value={issueItemNo} editable={false} />
-            </View>
-            <View style={styles.gridItem}>
-              <Text style={styles.inputLabel}>Item Name</Text>
-              <TextInput style={styles.inputDisabled} value={issueItemName} editable={false} />
-            </View>
-          </View>
-          
           <View style={styles.gridRow}>
             <View style={styles.gridItem}>
               <Text style={styles.inputLabel}>Weight (g)</Text>
@@ -1699,8 +1700,8 @@ export default function TransactionCalculationScreen({ navigation, route }) {
             <TextInput
               style={styles.inputHighlight}
               keyboardType="numeric"
-              value={paymentAmount !== '' ? paymentAmount : (finalAmount ? finalAmount.toFixed(2) : '')}
-              onChangeText={setPaymentAmount}
+              value={paymentAmount}
+              onChangeText={(v) => { paymentAmountTouchedRef.current = true; setPaymentAmount(v); }}
             />
           </View>
 
@@ -2340,6 +2341,7 @@ const styles = StyleSheet.create({
   dropdown: { position: 'absolute', top: 46, left: 0, right: 0, backgroundColor: '#FFF', borderRadius: 8, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, maxHeight: 150, zIndex: 1000, borderWidth: 1, borderColor: '#DDD' },
   dropItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   dropItemText: { fontSize: 13, color: DARK_BROWN, fontWeight: '600' },
+  dropItemSub: { fontSize: 11, color: '#A08850', fontWeight: '600', marginTop: 2 },
   gridRow: { flexDirection: 'row', gap: 12, marginBottom: 12 },
   gridItem: { flex: 1 },
   inputLabel: { fontSize: 11, color: '#A08850', fontWeight: '600', marginBottom: 4 },
